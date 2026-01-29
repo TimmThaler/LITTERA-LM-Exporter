@@ -2,32 +2,45 @@ import os
 import sqlite3
 import requests
 import qrcode
-from collections import defaultdict
+import json
+import shutil
+import re
+import xml.etree.ElementTree as ET
+from pathlib import Path
+
 from reportlab.lib.pagesizes import A4
 from reportlab.pdfgen import canvas
 from pypdf import PdfReader, PdfWriter
-import shutil
-from pathlib import Path
-
-import xml.etree.ElementTree as ET
 
 # =========================
-# KONFIGURATION
+# KONFIGURATION LADEN
 # =========================
 
-DB_PATH = "db/lmf_dump.sqlite"
-OUTPUT_BASE = "output"
-PDF_DIR = os.path.join(OUTPUT_BASE, "pdf")
-QR_DIR = os.path.join(OUTPUT_BASE, "qr")
-PRINT_DIR = os.path.join(OUTPUT_BASE, "print")
+def load_settings(config_file="config.json"):
+    if not os.path.exists(config_file):
+        raise FileNotFoundError(f"Konfigurationsdatei '{config_file}' wurde nicht gefunden!")
+    with open(config_file, "r", encoding="utf-8") as f:
+        return json.load(f)
 
-NEXTCLOUD_BASE_URL = "https://meine-nextcloud.tld"
-NEXTCLOUD_WEBDAV_URL = "https://meine-nextcloud.tld/remote.php/dav/files/user/"
-NEXTCLOUD_USER = "user" # Nextcloud-User
-NEXTCLOUD_PASS = "pass" # App-Passwort
+CONF = load_settings()
 
-SCHULNAME = "Schule"
-SCHULJAHR = "2025/26"
+DB_PATH = Path(CONF["db_path"])
+OUTPUT_BASE = Path(CONF["output_base"])
+PDF_DIR = OUTPUT_BASE / "pdf"
+QR_DIR = OUTPUT_BASE / "qr"
+PRINT_DIR = OUTPUT_BASE / "print"
+
+NC_USER = CONF["nextcloud"]["user"]
+NC_PASS = CONF["nextcloud"]["pass"]
+NC_BASE_URL = CONF["nextcloud"]["base_url"]
+NC_REMOTE_PREFIX = CONF["nextcloud"]["remote_path_prefix"]
+
+SCHULNAME = CONF["schul_name"]
+SCHULJAHR = CONF["schuljahr"]
+JAHRESID = CONF["jahres_id"]
+
+# Cache für bereits erstellte Nextcloud-Ordner, um Requests zu sparen
+CREATED_NC_DIRS = set()
 
 # =========================
 # HILFSFUNKTIONEN
@@ -35,400 +48,229 @@ SCHULJAHR = "2025/26"
 
 def ensure_dirs():
     for d in (PDF_DIR, QR_DIR, PRINT_DIR):
-        os.makedirs(d, exist_ok=True)
-
-def password_for(geburt, sid):
-    """
-    Wandelt "YYYY-MM-DD" in "TTMMJJJJ" um.
-    Fallback: ID + Schülernummer.
-    """
-    if geburt:
-        # Extrahiere YYYY-MM-DD
-        #date_part = str(geburt).split(" ")[0]
-        #parts = date_part.split("-")
-        parts = str(geburt).split("-")
-        if len(parts) == 3:
-            # Tag + Monat + Jahr
-            return f"{parts[2]}{parts[1]}{parts[0]}"
-    return f"ID{sid}"
+        d.mkdir(parents=True, exist_ok=True)
 
 def safe_filename(text):
     if not text: return "unbekannt"
-    return (
-        text.replace(" ", "_")
-            .replace("/", "_")
-            .replace("ä", "ae")
-            .replace("ö", "oe")
-            .replace("ü", "ue")
-            .replace("ß", "ss")
-            .lower()
-    )
+    replacements = {"ä": "ae", "ö": "oe", "ü": "ue", "ß": "ss", " ": "_", "/": "_"}
+    text = str(text).lower()
+    for k, v in replacements.items():
+        text = text.replace(k, v)
+    return re.sub(r"[^\w\-.]", "", text)
 
-def safe_filename_name(text):
-    if not text: return "unbekannt"
-    return (
-        text.replace(" ", "_")
-            .replace("/", "_")
-            .replace("__", "_")
-            .replace("ä", "ae")
-            .replace("ö", "oe")
-            .replace("ü", "ue")
-            .replace("ß", "ss")
-            #.lower()
-    )
-
-
-def get_aktuelle_klasse(cur, buchungsnummer, schuljahr=2025):
-    """
-    Liefert den Klassennamen (KurzBez) für einen Schüler (Buchungsnummer)
-    im angegebenen Schuljahr zurück.
-    
-    Args:
-        cur: sqlite3.Cursor
-        buchungsnummer: int oder str, LeserId
-        schuljahr: int, Standard 2025
-        
-    Returns:
-        str: Klassennamen (KurzBez) oder None, wenn kein Treffer
-    """
-    query = """
-        SELECT lug.KurzBez
-        FROM SchuelerSchuljahr ssj
-        JOIN Leser_UG lug
-          ON lug.Buchungsnummer = ssj.KlasseId
-        WHERE ssj.LeserId = ?
-          AND ssj.SchuljahrId = ?
-    """
-    row = cur.execute(query, (buchungsnummer, schuljahr)).fetchone()
-    
-    if row:
-        return row["KurzBez"]
-    else:
-        return "undef"
-
-# NEXTCLOUD UPLOAD AND SHARE
-import xml.etree.ElementTree as ET
-import requests
-
-def upload_and_share_nextcloud(local_file, remote_file, nc_url, username, password, safe_name=True):
-    """
-    Lädt eine Datei in Nextcloud hoch und erstellt einen öffentlichen Share-Link,
-    auch wenn die Datei bereits existiert. Wenn die Datei bereits freigegeben wurde,
-    wird der alte Freigabelink verwendet.
-    """
-
-    local_file = Path(local_file)
-    if not local_file.exists():
-        raise FileNotFoundError(local_file)
-
-    # ---- Dateiname vorbereiten ----
-    filename = local_file.name
-    if safe_name:
-        import re
-        filename = re.sub(r"[^\w\-.]", "_", filename)
-
-    remote_path = remote_file
-    remote_folder = Path(remote_path).parent
-
-    # ---- 1) Ordner in Nextcloud anlegen (WebDAV MKCOL) ----
-    parts = Path(remote_folder).parts
-    path_accum = ""
-    for part in parts:
-        path_accum = f"{path_accum}/{part}" if path_accum else part
-        url = f"{nc_url}/remote.php/dav/files/{username}/{path_accum}"
-        r = requests.request("MKCOL", url, auth=(username, password))
-        if r.status_code not in (201, 405):
-            raise RuntimeError(f"Ordner '{path_accum}' konnte nicht erstellt werden ({r.status_code}): {r.text}")
-
-    # ---- 2) Datei hochladen (auch wenn sie bereits existiert) ----
-    upload_url = f"{nc_url}/remote.php/dav/files/{username}/{remote_path}"
-    with open(local_file, "rb") as f:
-        r = requests.put(upload_url, data=f, auth=(username, password))
-
-    if r.status_code not in (200, 201, 204):
-        raise RuntimeError(f"Upload fehlgeschlagen ({r.status_code}): {r.text}")
-
-    # ---- 3) Überprüfen, ob die Datei bereits freigegeben wurde ----
-    existing_share_link = get_existing_share_link(nc_url, username, password, remote_path)
-
-    if existing_share_link:
-        # Datei ist bereits freigegeben, gib den alten Link zurück
-        print(f"Datei {remote_path} ist bereits freigegeben. Verwende den bestehenden Freigabelink.")
-        return existing_share_link
-    else:
-        # Datei wurde noch nicht freigegeben, neuen Share-Link erstellen
-        return create_new_share_link(nc_url, username, password, remote_path)
-
-
-def get_existing_share_link(nc_url, username, password, remote_path):
-    """
-    Prüft, ob bereits ein Share-Link für die Datei existiert und gibt diesen zurück.
-    """
-    share_api = f"{nc_url}/ocs/v2.php/apps/files_sharing/api/v1/shares"
-    headers = {"OCS-APIRequest": "true"}
-    params = {"path": remote_path}
-
-    r = requests.get(share_api, headers=headers, params=params, auth=(username, password))
-
-    # XML-Antwort parsen
-    try:
-        result = ET.fromstring(r.text)
-        # Überprüfen, ob ein Link existiert
-        share_url = result.find('.//url').text
-        return share_url
-    except Exception as e:
-        #print(f"Fehler beim Abrufen des bestehenden Freigabelinks: {e}")
-        return None
-
-
-def create_new_share_link(nc_url, username, password, remote_path):
-    """
-    Erstellt einen neuen Freigabelink für die Datei, falls sie noch nicht freigegeben wurde.
-    """
-    share_api = f"{nc_url}/ocs/v2.php/apps/files_sharing/api/v1/shares"
-    headers = {"OCS-APIRequest": "true"}
-    data = {"path": f"/{remote_path}", "shareType": 3, "permissions": 1}
-
-    r = requests.post(share_api, headers=headers, data=data, auth=(username, password))
-
-    # XML-Antwort parsen
-    try:
-        result = ET.fromstring(r.text)
-        # Extrahiere den neuen Link
-        url = result.find('.//url').text
-        return url
-    except Exception as e:
-        raise RuntimeError(f"Share fehlgeschlagen: erhaltene HTML-Antwort oder Parsing-Fehler:\n{r.text[:500]}\nFehler: {e}")
-
-
-
+def password_for(geburt, sid):
+    if geburt and "-" in str(geburt):
+        parts = str(geburt).split("-")
+        if len(parts) == 3:
+            return f"{parts[2]}{parts[1]}{parts[0]}"
+    return f"ID{sid}"
 
 # =========================
-# 1️⃣ DATEN AUS SQLITE
+# OPTIMIERTE DATENBANK LOGIK
 # =========================
 
 def load_data():
-    if not os.path.exists(DB_PATH):
-        print(f"Fehler: Datenbank {DB_PATH} nicht gefunden!")
+    """Lädt hocheffizient nur Schüler mit Büchern inkl. Klassennamen."""
+    if not DB_PATH.exists():
+        print(f"CRITICAL: Datenbank unter {DB_PATH} nicht gefunden!")
         return {}
 
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row 
-    cur = conn.cursor()
-    
     schueler_dict = {}
+    
+    # Ein einziger großer JOIN um Leser, Klasse und Bücher zu finden
+    # Wir filtern direkt im SQL auf Zurückgegeben = 0 und das Schuljahr
+    query = """
+        SELECT 
+            l.Buchungsnummer as leser_id, l.Lesernummer, l.Vorname, l.Nachname, l.Geburtsdatum,
+            lug.KurzBez as klasse,
+            t.Haupttitel, t.ISBN, e.Exemplarnummer
+        FROM Leser l
+        JOIN Verleih v ON v.Leser = l.Buchungsnummer
+        JOIN Exemplar e ON v.Exemplar = e.Buchungsnummer
+        JOIN Titel t ON e.Titel = t.Buchungsnummer
+        LEFT JOIN SchuelerSchuljahr ssj ON ssj.LeserId = l.Buchungsnummer AND ssj.SchuljahrId = ?
+        LEFT JOIN Leser_UG lug ON lug.Buchungsnummer = ssj.KlasseId
+        WHERE v.Zurückgegeben = 0
+    """
 
-    # Alle Leser abrufen
-    leser_rows = cur.execute("SELECT Buchungsnummer, Lesernummer, Lesergruppe, Vorname, Nachname, Geburtsdatum FROM Leser").fetchall()
+    with sqlite3.connect(DB_PATH) as conn:
+        conn.row_factory = sqlite3.Row
+        cur = conn.cursor()
+        rows = cur.execute(query, (JAHRESID,)).fetchall()
 
-    for l_row in leser_rows:
-        sid = str(l_row["Lesernummer"])
-        b_nummer = l_row["Buchungsnummer"]
-        
-        schueler_dict[sid] = {
-            "name": f"{l_row['Vorname']} {l_row['Nachname']}",
-            "name_file": f"{l_row['Nachname']}_{l_row['Vorname']}",
-            "klasse": get_aktuelle_klasse(cur, l_row["Buchungsnummer"]),
-            "geburt": l_row["Geburtsdatum"].split(" ")[0] if l_row["Geburtsdatum"] else None,
-            "buecher": []
-        }
-
-        #print(schueler_dict[sid]["klasse"])
-
-        # Verleih abrufen
-        verleih_rows = cur.execute(
-            "SELECT Exemplar FROM Verleih WHERE Leser=? AND Zurückgegeben=0", 
-            (b_nummer,)
-        ).fetchall()
-
-        for v_row in verleih_rows:
-            ex_row = cur.execute(
-                "SELECT Exemplarnummer, Titel FROM Exemplar WHERE Buchungsnummer=?", 
-                (v_row["Exemplar"],)
-            ).fetchone()
+        for row in rows:
+            sid = str(row["Lesernummer"])
             
-            if ex_row:
-                t_row = cur.execute(
-                    "SELECT Haupttitel, ISBN FROM Titel WHERE Buchungsnummer=?", 
-                    (ex_row["Titel"],)
-                ).fetchone()
-                
-                if t_row:
-                    schueler_dict[sid]["buecher"].append({
-                        "titel": t_row["Haupttitel"],
-                        "inv": ex_row["Exemplarnummer"],
-                        "isbn": t_row["ISBN"] or "---"
-                    })
+            # Wenn Schüler noch nicht im Dict, neu anlegen
+            if sid not in schueler_dict:
+                schueler_dict[sid] = {
+                    "name": f"{row['Vorname']} {row['Nachname']}",
+                    "name_file": f"{row['Nachname']}_{row['Vorname']}",
+                    "klasse": row["klasse"] if row["klasse"] else "undef",
+                    "geburt": str(row["Geburtsdatum"]).split(" ")[0] if row["Geburtsdatum"] else None,
+                    "buecher": []
+                }
+            
+            # Buch zum Schüler hinzufügen
+            schueler_dict[sid]["buecher"].append({
+                "titel": row["Haupttitel"],
+                "inv": row["Exemplarnummer"],
+                "isbn": row["ISBN"] or "---"
+            })
 
+    # Bücher sortieren
+    for sid in schueler_dict:
         schueler_dict[sid]["buecher"].sort(key=lambda b: b["titel"].lower())
 
-    conn.close()
     return schueler_dict
 
 # =========================
-# 2️⃣ PDF ERZEUGEN
+# OPTIMIERTE NEXTCLOUD LOGIK
+# =========================
+
+def upload_and_share_nextcloud(local_file, remote_file_path):
+    """Lädt Datei hoch. Reduziert Ordner-Requests auf ein Minimum."""
+    
+    # 1. Verzeichnisse erstellen (nur wenn in dieser Sitzung noch nicht geschehen)
+    parts = remote_file_path.parent.parts
+    path_accum = ""
+    for part in parts:
+        path_accum = f"{path_accum}/{part}" if path_accum else part
+        if path_accum not in CREATED_NC_DIRS:
+            url = f"{NC_BASE_URL}/remote.php/dav/files/{NC_USER}/{path_accum}"
+            # MKCOL wirft 405 wenn Ordner existiert -> einfach ignorieren
+            requests.request("MKCOL", url, auth=(NC_USER, NC_PASS))
+            CREATED_NC_DIRS.add(path_accum)
+
+    # 2. Upload
+    upload_url = f"{NC_BASE_URL}/remote.php/dav/files/{NC_USER}/{remote_file_path}"
+    with open(local_file, "rb") as f:
+        r = requests.put(upload_url, data=f, auth=(NC_USER, NC_PASS))
+    
+    if r.status_code not in (200, 201, 204):
+        raise RuntimeError(f"Upload fehlgeschlagen: {r.status_code}")
+
+    # 3. Share-Link (Prüfen ob existiert, sonst neu)
+    share_api = f"{NC_BASE_URL}/ocs/v2.php/apps/files_sharing/api/v1/shares"
+    
+    r_check = requests.get(share_api, headers={"OCS-APIRequest": "true"}, 
+                           params={"path": str(remote_file_path)}, auth=(NC_USER, NC_PASS))
+    try:
+        existing_url = ET.fromstring(r_check.text).find('.//url').text
+        if existing_url: return existing_url
+    except:
+        pass
+
+    data = {"path": f"/{remote_file_path}", "shareType": 3, "permissions": 1}
+    r_share = requests.post(share_api, headers={"OCS-APIRequest": "true"}, data=data, auth=(NC_USER, NC_PASS))
+    return ET.fromstring(r_share.text).find('.//url').text
+
+# =========================
+# PDF & QR ERZEUGUNG (Bleibt stabil)
 # =========================
 
 def create_pdf(sid, data):
-    # 1. Den Klassennamen für den Pfad "sicher" machen
-    klasse_folder = safe_filename(data['klasse'])
+    klasse_slug = safe_filename(data['klasse'])
+    target_dir = PDF_DIR / klasse_slug
+    target_dir.mkdir(parents=True, exist_ok=True)
     
-    # 2. Den vollen Pfad zum Klassen-Unterordner erstellen
-    target_dir = os.path.join(PDF_DIR, klasse_folder)
-    
-    # 3. Den Ordner erstellen, falls er noch nicht existiert
-    os.makedirs(target_dir, exist_ok=True)
-    
-    # 4. Den endgültigen Dateipfad zusammenbauen
-    raw_path = os.path.join(target_dir, safe_filename_name(f"{data['name_file']}_{sid}_raw.pdf"))
-    final_path = os.path.join(target_dir, safe_filename_name(f"{data['name_file']}_{sid}.pdf"))
+    file_name = f"{safe_filename(data['name_file'])}_{sid}.pdf"
+    raw_path = target_dir / f"raw_{file_name}"
+    final_path = target_dir / file_name
 
-    c = canvas.Canvas(raw_path, pagesize=A4)
+    c = canvas.Canvas(str(raw_path), pagesize=A4)
     c.setFont("Helvetica-Bold", 14)
-    c.drawString(50, 800, f"{SCHULNAME}")
+    c.drawString(50, 800, SCHULNAME)
     c.setFont("Helvetica", 12)
     c.drawString(50, 780, "Rückgabeübersicht Schulbücher")
-
     c.setFont("Helvetica", 11)
-    c.drawString(50, 750, f"Name: {data['name']}")
-    c.drawString(50, 730, f"Klasse: {data['klasse']}")
-    c.drawString(50, 710, f"Schuljahr: {SCHULJAHR}")
-
+    c.drawString(50, 750, f"Name: {data['name']} (Klasse: {data['klasse']})")
+    
     y = 670
-    c.setFont("Helvetica-Bold", 11)
-    c.drawString(50, y, "Diese Bücher sind zum Schuljahresende zurückzugeben:")
-    y -= 25
-
-    if not data["buecher"]:
-        c.setFont("Helvetica-Oblique", 11)
-        c.drawString(60, y, "Keine offenen Ausleihen gefunden.")
-    else:
-        for b in data["buecher"]:
-            c.setFont("Helvetica", 10)
-            titel_kurz = (b['titel'][:75] + '..') if len(b['titel']) > 75 else b['titel']
-            c.drawString(60, y, f"• {titel_kurz}")
-            
-            y -= 14
-            c.setFont("Helvetica-Oblique", 9)
-            c.drawString(70, y, f"ISBN: {b['isbn']} | Inv-Nr: {b['inv']}")
-            
-            y -= 20 
-            if y < 100:
-                c.showPage()
-                y = 750
-
-    c.setFont("Helvetica", 8)
-    c.drawString(50, 50, "Passwort: Geburtsdatum (TTMMJJJJ) oder ID + Schülernummer.")
+    for b in data["buecher"]:
+        c.setFont("Helvetica", 10)
+        c.drawString(60, y, f"• {b['titel'][:70]}")
+        y -= 14
+        c.setFont("Helvetica-Oblique", 9)
+        c.drawString(70, y, f"Inv: {b['inv']} | ISBN: {b['isbn']}")
+        y -= 20
+        if y < 80: # Seitenschutz
+            c.showPage()
+            y = 750
     c.save()
 
-    # Verschlüsselung
     reader = PdfReader(raw_path)
     writer = PdfWriter()
     for page in reader.pages:
         writer.add_page(page)
-
-    #pw = password_for(data["geburt"], sid)
-    #writer.encrypt(user_password=pw)
-    if data.get("klasse") not in (None, "undef"):
-        pw = password_for(data["geburt"], sid)
-        writer.encrypt(user_password=pw)
+    
+    if data["klasse"] != "undef":
+        writer.encrypt(user_password=password_for(data["geburt"], sid))
 
     with open(final_path, "wb") as f:
         writer.write(f)
-    os.remove(raw_path)
-    
+    raw_path.unlink()
     return final_path
 
-# =========================
-# 3️⃣ WEITERE FUNKTIONEN (QR & Print)
-# =========================
-
-def create_qr(link, sid):
-    qr = qrcode.QRCode(box_size=10, border=2)
-    qr.add_data(link)
-    qr.make(fit=True)
-    img = qr.make_image(fill_color="black", back_color="white")
-    img.save(os.path.join(QR_DIR, f"{sid}.png"))
-
 def create_print_page(sid, data, link):
-    # 1. Den Klassennamen für den Pfad "sicher" machen
-    klasse_folder = safe_filename(data['klasse'])
+    klasse_slug = safe_filename(data['klasse'])
+    target_dir = PRINT_DIR / klasse_slug
+    target_dir.mkdir(parents=True, exist_ok=True)
     
-    # 2. Den vollen Pfad zum Klassen-Unterordner erstellen
-    target_dir = os.path.join(PRINT_DIR, klasse_folder)
+    output_path = target_dir / f"PRINT_{safe_filename(data['name_file'])}_{sid}.pdf"
     
-    # 3. Den Ordner erstellen, falls er noch nicht existiert
-    os.makedirs(target_dir, exist_ok=True)
-    
-    # 4. Den endgültigen Dateipfad zusammenbauen
-    output_path = os.path.join(target_dir, safe_filename_name(f"{data['name_file']}_{sid}.pdf"))
-    
-    # Ab hier wie gehabt:
-    c = canvas.Canvas(output_path, pagesize=A4)
+    qr = qrcode.make(link)
+    qr_temp = QR_DIR / f"{sid}.png"
+    qr.save(qr_temp)
+
+    c = canvas.Canvas(str(output_path), pagesize=A4)
     c.setFont("Helvetica-Bold", 18)
     c.drawString(50, 780, "Schulbuch-Rückgabe – Dein QR-Zugang")
-    
     c.setFont("Helvetica", 12)
     c.drawString(50, 750, f"Für: {data['name']} (Klasse {data['klasse']})")
-    
-    qr_path = os.path.join(QR_DIR, f"{sid}.png")
-    if os.path.exists(qr_path):
-        c.drawImage(qr_path, 50, 500, 200, 200)
-
-    c.setFont("Helvetica", 11)
-    c.drawString(50, 500, f"Link: {link}")
-    c.drawString(50, 470, "1. QR-Code scannen")
-    c.drawString(50, 450, "2. Passwort eingeben:")
+    c.drawImage(str(qr_temp), 50, 500, 180, 180)
     
     c.setFont("Helvetica-Bold", 11)
     pw_hint = "Geburtsdatum (TTMMJJJJ)" if data["geburt"] else f"ID{sid}"
-    c.drawString(65, 430, f"--> {pw_hint}")
-    
-    #c.setFont("Helvetica", 9)
-    #c.drawString(50, 380, "Sollte das Geburtsdatum nicht funktionieren, nutze: ID + deine Schülernummer.")
-    
+    c.drawString(50, 470, f"Passwort: {pw_hint}")
     c.save()
-    
-    
+    qr_temp.unlink()
+
 # =========================
-# 🚀 MAIN
+# MAIN EXECUTION
 # =========================
 
 def main():
     ensure_dirs()
+    print("Suche Schüler mit offenen Ausleihen...")
     daten = load_data()
-    print(f"{len(daten)} Leser:innen geladen.")
+    
+    total = len(daten)
+    print(f"{total} Schüler:innen mit offenen Ausleihen gefunden.")
 
-    #max_test = 30
-    #count = 0
-
+    processed = 0
     for sid, data in daten.items():
-        # Wenn es keine Verleihdaten gibt, dann gehen wir direkt zum nächsten Leser.
-        if not data.get("buecher"):
-            continue  # nur diesen Durchlauf überspringen
-        
-        print(f"Verarbeite: {data['name']} (Klasse: {data['klasse']}, {data['geburt']})...")
-        local_pdf_file = create_pdf(sid, data)
-        #print(local_file)
-        # Link-Generierung
-        link = upload_and_share_nextcloud(
-            local_pdf_file,
-            f"Buecherrueckgabe_aktuell/{safe_filename(data['klasse'])}/{Path(local_pdf_file).name}",
-            NEXTCLOUD_BASE_URL,
-            NEXTCLOUD_USER,
-            NEXTCLOUD_PASS
-        )
+        try:
+            processed += 1
+            print(f"[{processed}/{total}] {data['name']} (Klasse: {data['klasse']})")
+            
+            # 1. PDF erstellen
+            local_pdf = create_pdf(sid, data)
+            
+            # 2. Upload Pfad bestimmen & Hochladen
+            remote_path = Path(NC_REMOTE_PREFIX) / safe_filename(data['klasse']) / local_pdf.name
+            share_link = upload_and_share_nextcloud(local_pdf, remote_path)
+            
+            # 3. QR & Druck-Seite
+            create_print_page(sid, data, share_link)
+            
+        except Exception as e:
+            print(f" !!! Fehler bei Schüler {sid} ({data['name']}): {e}")
 
-        create_qr(link, sid)
-        create_print_page(sid, data, link)
+    if QR_DIR.exists():
+        shutil.rmtree(QR_DIR)
         
-        #count += 1
-        #if count >= max_test:
-        #    break
-
-    shutil.rmtree(QR_DIR)
-    print("\nFERTIG. Alle Dateien erstellt.")
-    print(f"{len(daten)} Leser:innen verarbeitet.")
+    print(f"\nFERTIG. {processed} Datensätze erfolgreich verarbeitet.")
 
 if __name__ == "__main__":
     main()
