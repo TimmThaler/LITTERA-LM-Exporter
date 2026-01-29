@@ -4,3 +4,4 @@ tqdm
 reportlab
 pypdf
 Pillow
+customtkinter
