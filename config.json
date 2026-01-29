@@ -1,0 +1,15 @@
+{
+  "db_path": "Pfad zur Datenbank",
+  "output_base": "output",
+  "schul_name": "Deine Schule",
+  "schuljahr": "2025/26",
+  "jahres_id": 2025, # In der Regel das Kalenderjahr, in dem das Schuljahr begonnen hat.
+  "nextcloud": {
+    "base_url": "https://meine-nextcloud.de",
+    "user": "user",
+    "pass": "pass",
+    "remote_path_prefix": "Buecher/Rueckgabe_aktuell"
+  }
+}
+
+
