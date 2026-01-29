@@ -4,5 +4,5 @@ Mit diesem Skript kannst du aus deiner LITTERA LM Datenbank komfortabel Ausleih-
 **Voraussetzung:** Du musst einen sqlite-Dump deiner LITTERA LM-Datenbank haben.
 
 ## Weitere Schritte
-- [ ] config-Datei
+- [x] config-Datei
 - [ ] grafische Benutzeroberfläche (evtl. browserbasiert)
