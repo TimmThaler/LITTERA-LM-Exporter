@@ -3,8 +3,8 @@ name: Build Executables
 on:
   push:
     tags:
-      - 'v*' # Startet den Build, wenn du einen Tag wie v1.0.0 pushst
-  workflow_dispatch: # Erlaubt manuelles Starten unter "Actions"
+      - 'v*'
+  workflow_dispatch:
 
 jobs:
   build:
@@ -12,21 +12,21 @@ jobs:
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
-        os: [windows-latest, macos-11, ubuntu-20.04]
+        os: [windows-latest, macos-latest, ubuntu-latest]
         include:
           - os: windows-latest
-            artifact_name: LMF-Manager-Windows.exe
+            artifact_name: LMF-Manager-Windows
             bundle_path: dist/LMF-Manager.exe
-          - os: macos-11
-            artifact_name: LMF-Manager-Mac.zip
-            bundle_path: dist/LMF-Manager.app
-          - os: ubuntu-20.04
-            artifact_name: LMF-Manager-Linux.AppImage
-            bundle_path: dist/LMF-Manager-x86_64.AppImage
+          - os: macos-latest
+            artifact_name: LMF-Manager-Mac
+            bundle_path: dist/LMF-Manager-Mac.zip
+          - os: ubuntu-latest
+            artifact_name: LMF-Manager-Linux
+            bundle_path: dist/LMF-Manager
 
     steps:
       - name: Checkout Code
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
       - name: Set up Python
         uses: actions/setup-python@v4
@@ -39,39 +39,28 @@ jobs:
           pip install -r requirements.txt
           pip install pyinstaller
 
-      # Windows & Mac Build
-      - name: Build with PyInstaller (Windows & Mac)
-        if: matrix.os != 'ubuntu-20.04'
+      - name: Build with PyInstaller
         run: |
           pyinstaller --noconfirm --onefile --windowed --collect-all customtkinter --name "LMF-Manager" generate_mit_gui.py
 
-      # Linux AppImage Build (Spezieller Prozess)
-      - name: Build AppImage (Linux)
-        if: matrix.os == 'ubuntu-20.04'
-        run: |
-          pip install python-appimage
-          python -m python_appimage build pypi -n "LMF-Manager" -v "1.0.0" customtkinter requests qrcode tqdm reportlab pypdf Pillow
-          # Alternativ nutzen wir PyInstaller + appimagetool (hier vereinfacht als binäre Datei)
-          pyinstaller --noconfirm --onefile --windowed --collect-all customtkinter --name "LMF-Manager" generate_mit_gui.py
-          chmod +x dist/LMF-Manager
-
-      # macOS App zippen (da .app ein Ordner ist)
-      - name: Zip macOS App
-        if: matrix.os == 'macos-11'
+      # macOS App zippen
+      - name: Zip macOS App (Mac only)
+        if: matrix.os == 'macos-latest'
         run: |
           cd dist
           zip -r ../LMF-Manager-Mac.zip LMF-Manager.app
+          echo "bundle_path=LMF-Manager-Mac.zip" >> $GITHUB_ENV
 
-      # Upload der fertigen Dateien zu GitHub
-      - name: Upload Artifacts
-        uses: actions/upload-artifact@v3
+      # Upload Artifacts
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact_name }}
-          path: ${{ matrix.os == 'macos-11' && 'LMF-Manager-Mac.zip' || matrix.bundle_path }}
+          path: ${{ matrix.os == 'macos-latest' && 'LMF-Manager-Mac.zip' || matrix.bundle_path }}
 
-      # Optional: Automatisch ein GitHub Release erstellen
+      # Release erstellen (nur bei Tags)
       - name: Release
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@v2
         if: startsWith(github.ref, 'refs/tags/')
         with:
           files: |
