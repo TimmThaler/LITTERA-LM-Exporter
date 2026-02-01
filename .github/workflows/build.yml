@@ -10,73 +10,85 @@ jobs:
   build:
     name: Build on ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
+
     strategy:
       matrix:
-        os: [windows-latest, macos-latestm macos-11, ubuntu-latest]
         include:
           - os: windows-latest
-            artifact_name: LMF-Manager-Windows
-            bundle_path: dist/LMF-Manager.exe
-          - os: macos-latest
-            artifact_name: LMF-Manager-Mac-latest
-            bundle_path: dist/LMF-Manager-Mac-latest.zip
-          - os: macos-11
-            artifact_name: LMF-Manager-Mac-latest
-            bundle_path: dist/LMF-Manager-Mac-macos11.zip
+            artifact: LMF-Manager-Windows
+            output: dist/LMF-Export-Manager.exe
+
           - os: ubuntu-latest
-            artifact_name: LMF-Manager-Linux
-            bundle_path: dist/LMF-Manager
+            artifact: LMF-Manager-Linux
+            output: dist/LMF-Export-Manager
+
+          - os: macos-latest
+            artifact: LMF-Manager-Mac-latest
+            zip: LMF-Manager-Mac-latest.zip
+
+          - os: macos-11
+            artifact: LMF-Manager-Mac-macos11
+            zip: LMF-Manager-Mac-macos11.zip
 
     steps:
-      - name: Checkout Code
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Set up Python
+      - name: Setup Python
         uses: actions/setup-python@v4
         with:
-          python-version: '3.13'
+          python-version: '3.10'
 
-      - name: Install Dependencies
+      - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
           pip install pyinstaller
 
-      - name: Build with PyInstaller
+
+      # Windows
+      - name: Build Windows
+        if: matrix.os == 'windows-latest'
         run: |
           pyinstaller --noconfirm --onefile --windowed --collect-all customtkinter --name "LMF Export-Manager" generate_mit_gui.py
 
-      # macOS-latest App zippen
-      - name: Zip macOS App (Mac only)
-        if: matrix.os == 'macos-latest'
+      # macOS + Linux
+      - name: Build macOS / Linux
+        if: matrix.os != 'windows-latest'
         run: |
-          cd dist
-          zip -r ../LMF-Manager-Mac.zip LMF-Manager.app
-          echo "bundle_path=LMF-Manager-Mac-latest.zip" >> $GITHUB_ENV
+          pyinstaller --noconfirm \
+            --windowed \
+            --collect-all customtkinter \
+            --name "LMF-Export-Manager" \
+            generate_mit_gui.py
 
-      # macOS-macos11 App zippen
-      - name: Zip macOS App (Mac only)
-        if: matrix.os == 'macos-11'
+      - name: Zip macOS App
+        if: startsWith(matrix.os, 'macos')
         run: |
           cd dist
-          zip -r ../LMF-Manager-Mac.zip LMF-Manager.app
-          echo "bundle_path=LMF-Manager-Mac-macos11.zip" >> $GITHUB_ENV
+          zip -r "../${{ matrix.zip }}" LMF-Export-Manager.app
 
       # Upload Artifacts
-      - name: Upload Artifact
+      - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.artifact_name }}
-          path: ${{ matrix.os == 'macos-latest' && 'LMF-Manager-Mac.zip' || matrix.bundle_path }}
+          name: ${{ matrix.artifact }}
+          path: |
+            ${{ matrix.output }}
+            ${{ matrix.zip }}
 
-      # Release erstellen (nur bei Tags)
-      - name: Release
-        uses: softprops/action-gh-release@v2
-        if: startsWith(github.ref, 'refs/tags/')
+  release:
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: build
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/download-artifact@v4
         with:
-          files: |
-            dist/LMF-Manager.exe
-            LMF-Manager-Mac.zip
-            dist/LMF-Manager
+          path: artifacts
+
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/**/*
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
