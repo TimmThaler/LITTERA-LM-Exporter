@@ -10,30 +10,36 @@ jobs:
   build:
     name: Build on ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
+
     strategy:
       matrix:
-        os: [windows-latest, macos-latest, ubuntu-latest]
         include:
           - os: windows-latest
             artifact_name: LMF-Manager-Windows
-            bundle_path: dist/LMF-Manager.exe
-          - os: macos-latest
-            artifact_name: LMF-Manager-Mac
-            bundle_path: dist/LMF-Manager-Mac.zip
+            output_path: dist/LMF-Manager.exe
+
           - os: ubuntu-latest
             artifact_name: LMF-Manager-Linux
-            bundle_path: dist/LMF-Manager
+            output_path: dist/LMF-Manager
+
+          - os: macos-latest
+            artifact_name: LMF-Manager-Mac-latest
+            zip_name: LMF-Manager-Mac-latest.zip
+
+          - os: macos-11
+            artifact_name: LMF-Manager-Mac-macos11
+            zip_name: LMF-Manager-Mac-macos11.zip
 
     steps:
-      - name: Checkout Code
+      - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Set up Python
+      - name: Setup Python
         uses: actions/setup-python@v4
         with:
           python-version: '3.10'
 
-      - name: Install Dependencies
+      - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
@@ -41,31 +47,44 @@ jobs:
 
       - name: Build with PyInstaller
         run: |
-          pyinstaller --noconfirm --onefile --windowed --collect-all customtkinter --name "LMF-Manager" generate_mit_gui.py
+          pyinstaller --noconfirm \
+            --windowed \
+            --onefile \
+            --collect-all customtkinter \
+            --name "LMF-Manager" \
+            generate_mit_gui.py
 
       # macOS App zippen
-      - name: Zip macOS App (Mac only)
-        if: matrix.os == 'macos-latest'
+      - name: Zip macOS App
+        if: startsWith(matrix.os, 'macos')
         run: |
           cd dist
-          zip -r ../LMF-Manager-Mac.zip LMF-Manager.app
-          echo "bundle_path=LMF-Manager-Mac.zip" >> $GITHUB_ENV
+          zip -r "../${{ matrix.zip_name }}" LMF-Manager.app
 
-      # Upload Artifacts
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact_name }}
-          path: ${{ matrix.os == 'macos-latest' && 'LMF-Manager-Mac.zip' || matrix.bundle_path }}
+          path: |
+            ${{ matrix.output_path }}
+            ${{ matrix.zip_name }}
 
-      # Release erstellen (nur bei Tags)
-      - name: Release
+  release:
+    name: Create Release
+    needs: build
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/')
+
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
-        if: startsWith(github.ref, 'refs/tags/')
         with:
           files: |
-            dist/LMF-Manager.exe
-            LMF-Manager-Mac.zip
-            dist/LMF-Manager
+            artifacts/**/*
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
