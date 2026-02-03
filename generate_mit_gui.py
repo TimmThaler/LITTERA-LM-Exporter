@@ -11,13 +11,25 @@ import threading
 import xml.etree.ElementTree as ET
 from pathlib import Path
 import customtkinter as ctk
-from tkinter import filedialog  # Bleibt notwendig für native OS-Fenster
+from tkinter import filedialog
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
+import sys
 
 from reportlab.lib.pagesizes import A4
 from reportlab.pdfgen import canvas
 from pypdf import PdfReader, PdfWriter
+
+# =========================
+# GLOBALE HILFSFUNKTIONEN (Wichtig für EXE)
+# =========================
+def get_base_path():
+    """ Ermittelt den Pfad, in dem die EXE (oder das Skript) liegt """
+    if hasattr(sys, 'frozen'):
+        # Pfad der .exe Datei
+        return Path(sys.executable).parent
+    # Pfad des .py Skripts
+    return Path(__file__).parent
 
 # =========================
 # LOGGING HANDLER (GUI)
@@ -43,7 +55,10 @@ class RueckgabeApp(ctk.CTk):
     def __init__(self):
         super().__init__()
 
-        self.CONFIG_FILE = "config.json"
+        # Basis-Pfad für Config festlegen
+        self.base_path = get_base_path()
+        self.CONFIG_FILE = self.base_path / "config.json"
+        
         self.load_settings()
         self.stop_requested = False
 
@@ -68,12 +83,8 @@ class RueckgabeApp(ctk.CTk):
     # UI: TAB EINSTELLUNGEN
     # ----------------------------------------------------------------
     def setup_settings_tab(self):
-        # Spalte 0: Label, Spalte 1: Entry (flexibel), Spalte 2: Button
         self.tab_settings.grid_columnconfigure(1, weight=1)
-        
         self.entries = {}
-        # Aufbau: (Anzeige-Name, Config-Key, Typ)
-        # Typen: None = nur Text, "file" = Datei-Browser, "dir" = Ordner-Browser
         fields = [
             ("Schulname", "schul_name", None),
             ("Schuljahr", "schuljahr", None),
@@ -96,7 +107,6 @@ class RueckgabeApp(ctk.CTk):
             entry.insert(0, str(self.get_config_value(key)))
             self.entries[key] = entry
 
-            # Falls ein Browser-Typ definiert ist, fügen wir einen CTkButton hinzu
             if browse_type == "file":
                 btn = ctk.CTkButton(self.tab_settings, text="Datei wählen", width=100, 
                                     command=lambda k=key: self.browse_file(k))
@@ -105,30 +115,20 @@ class RueckgabeApp(ctk.CTk):
                 btn = ctk.CTkButton(self.tab_settings, text="Ordner wählen", width=100, 
                                     command=lambda k=key: self.browse_directory(k))
                 btn.grid(row=i, column=2, padx=(5, 20), pady=8)
-            else:
-                # Platzhalter für Spalte 2 bei Feldern ohne Button
-                spacer = ctk.CTkLabel(self.tab_settings, text="")
-                spacer.grid(row=i, column=2, padx=(5, 20))
 
         self.save_cfg_button = ctk.CTkButton(self.tab_settings, text="EINSTELLUNGEN SPEICHERN", 
                                              command=self.save_settings, fg_color="#2FA572", 
                                              hover_color="#106A43", font=("", 14, "bold"), height=40)
         self.save_cfg_button.grid(row=len(fields), column=0, columnspan=3, padx=20, pady=30, sticky="ew")
 
-    # ----------------------------------------------------------------
-    # LOGIK: DATEI-BROWSER
-    # ----------------------------------------------------------------
     def browse_file(self, key):
-        path = filedialog.askopenfilename(
-            title="SQLite Datenbank auswählen",
-            filetypes=[("SQLite Datenbank", "*.sqlite"), ("Alle Dateien", "*.*")]
-        )
+        path = filedialog.askopenfilename(filetypes=[("SQLite Datenbank", "*.sqlite"), ("Alle Dateien", "*.*")])
         if path:
             self.entries[key].delete(0, "end")
             self.entries[key].insert(0, path)
 
     def browse_directory(self, key):
-        path = filedialog.askdirectory(title="Ausgabe-Ordner auswählen")
+        path = filedialog.askdirectory()
         if path:
             self.entries[key].delete(0, "end")
             self.entries[key].insert(0, path)
@@ -139,42 +139,32 @@ class RueckgabeApp(ctk.CTk):
     def setup_process_tab(self):
         self.tab_process.grid_columnconfigure(0, weight=1)
         self.tab_process.grid_rowconfigure(1, weight=1)
-
         self.progress_frame = ctk.CTkFrame(self.tab_process)
         self.progress_frame.grid(row=0, column=0, padx=10, pady=10, sticky="ew")
         self.progress_frame.grid_columnconfigure(0, weight=1)
-
         self.progress_label = ctk.CTkLabel(self.progress_frame, text="Bereit zum Start.")
         self.progress_label.grid(row=0, column=0, pady=(10, 5))
-
         self.progress_bar = ctk.CTkProgressBar(self.progress_frame)
         self.progress_bar.grid(row=1, column=0, padx=20, pady=(0, 15), sticky="ew")
         self.progress_bar.set(0)
-
         self.log_textbox = ctk.CTkTextbox(self.tab_process, state="disabled", font=("Consolas", 12))
         self.log_textbox.grid(row=1, column=0, padx=10, pady=10, sticky="nsew")
-
         self.action_frame = ctk.CTkFrame(self.tab_process, fg_color="transparent")
         self.action_frame.grid(row=2, column=0, padx=10, pady=10, sticky="ew")
         self.action_frame.grid_columnconfigure((0, 1), weight=1)
-
-        self.start_button = ctk.CTkButton(self.action_frame, text="PROZESS STARTEN", 
-                                          command=self.start_process_thread, height=50, font=("", 16, "bold"))
+        self.start_button = ctk.CTkButton(self.action_frame, text="PROZESS STARTEN", command=self.start_process_thread, height=50, font=("", 16, "bold"))
         self.start_button.grid(row=0, column=0, padx=(0, 5), sticky="ew")
-
-        self.stop_button = ctk.CTkButton(self.action_frame, text="ABBRECHEN", 
-                                         command=self.request_stop, height=50, font=("", 16, "bold"),
-                                         fg_color="#A83232", hover_color="#7A2424", state="disabled")
+        self.stop_button = ctk.CTkButton(self.action_frame, text="ABBRECHEN", command=self.request_stop, height=50, font=("", 16, "bold"), fg_color="#A83232", hover_color="#7A2424", state="disabled")
         self.stop_button.grid(row=0, column=1, padx=(5, 0), sticky="ew")
 
     # ----------------------------------------------------------------
     # LOGIK: CONFIG & SETTINGS
     # ----------------------------------------------------------------
     def load_settings(self):
-        if not os.path.exists(self.CONFIG_FILE):
+        if not self.CONFIG_FILE.exists():
             self.config = {
                 "schul_name": "Meine Schule", "schuljahr": "2024/25", "jahres_id": 2024,
-                "db_path": "db/lmf.sqlite", "output_base": "output",
+                "db_path": str(self.base_path / "db/lmf.sqlite"), "output_base": str(self.base_path / "output"),
                 "nextcloud": {"base_url": "", "user": "", "pass": "", "remote_path_prefix": "LMF"}
             }
         else:
@@ -205,13 +195,11 @@ class RueckgabeApp(ctk.CTk):
         except Exception as e:
             logger.error(f"Fehler beim Speichern: {e}")
 
-    # ----------------------------------------------------------------
-    # LOGIK: PROZESS
-    # ----------------------------------------------------------------
     def setup_logging(self):
         global logger
         logger = logging.getLogger()
         logger.setLevel(logging.INFO)
+        if logger.hasHandlers(): logger.handlers.clear()
         gh = TextHandler(self.log_textbox)
         gh.setFormatter(logging.Formatter('%(levelname)s: %(message)s'))
         logger.addHandler(gh)
@@ -227,13 +215,16 @@ class RueckgabeApp(ctk.CTk):
         self.stop_button.configure(state="disabled")
         logger.warning("Abbruch eingeleitet...")
 
+    # ----------------------------------------------------------------
+    # HAUPT LOGIK
+    # ----------------------------------------------------------------
     def run_main_logic(self):
         try:
             out_base = Path(self.config["output_base"])
             pdf_dir, qr_dir, print_dir = out_base/"pdf", out_base/"qr", out_base/"print"
             for d in (pdf_dir, qr_dir, print_dir): d.mkdir(parents=True, exist_ok=True)
             
-            cache_db = Path(out_base/"cache_db/share_cache.sqlite")
+            cache_db = out_base / "cache_db/share_cache.sqlite"
             cache_db.parent.mkdir(parents=True, exist_ok=True)
             with sqlite3.connect(cache_db) as conn:
                 conn.execute("CREATE TABLE IF NOT EXISTS share_cache (sid TEXT PRIMARY KEY, share_url TEXT, data_hash TEXT, remote_path TEXT)")
@@ -250,13 +241,11 @@ class RueckgabeApp(ctk.CTk):
                 logger.warning("Keine Daten gefunden."); self.reset_ui(); return
 
             logger.warning(f"Starte Prozess für {total} Schüler...")
-            
             created_dirs = set()
             count, errors = 0, 0
 
             for sid, data in daten.items():
                 if self.stop_requested: break
-
                 try:
                     curr_hash = self.gen_hash(data)
                     with sqlite3.connect(cache_db) as conn:
@@ -299,29 +288,30 @@ class RueckgabeApp(ctk.CTk):
 
     def fetch_db_data(self):
         d = {}
-        try:
-            with sqlite3.connect(self.config["db_path"]) as conn:
-                conn.row_factory = sqlite3.Row
-                rows = conn.execute("""
-                    SELECT l.Buchungsnummer, l.Lesernummer, l.Vorname, l.Nachname, l.Geburtsdatum,
-                    lug.KurzBez as klasse, t.Haupttitel, t.ISBN, e.Exemplarnummer
-                    FROM Leser l
-                    JOIN Verleih v ON v.Leser = l.Buchungsnummer
-                    JOIN Exemplar e ON v.Exemplar = e.Buchungsnummer
-                    JOIN Titel t ON e.Titel = t.Buchungsnummer
-                    LEFT JOIN SchuelerSchuljahr ssj ON ssj.LeserId = l.Buchungsnummer AND ssj.SchuljahrId = ?
-                    LEFT JOIN Leser_UG lug ON lug.Buchungsnummer = ssj.KlasseId
-                    WHERE v.Zurückgegeben = 0
-                """, (self.config["jahres_id"],)).fetchall()
-                for r in rows:
-                    sid = str(r["Lesernummer"])
-                    if sid not in d:
-                        d[sid] = {"name": f"{r['Vorname']} {r['Nachname']}", "name_file": f"{r['Nachname']}_{r['Vorname']}",
-                                  "klasse": r["klasse"] or "undef", "geburt": str(r["Geburtsdatum"]).split(" ")[0] if r["Geburtsdatum"] else None,
-                                  "buecher": []}
-                    d[sid]["buecher"].append({"titel": r["Haupttitel"], "inv": r["Exemplarnummer"], "isbn": r["ISBN"] or "---"})
-        except Exception as e:
-            logger.error(f"DB-Fehler: {e}")
+        db_path = Path(self.config["db_path"])
+        if not db_path.exists():
+            logger.error(f"DB nicht gefunden: {db_path}")
+            return d
+        with sqlite3.connect(db_path) as conn:
+            conn.row_factory = sqlite3.Row
+            rows = conn.execute("""
+                SELECT l.Buchungsnummer, l.Lesernummer, l.Vorname, l.Nachname, l.Geburtsdatum,
+                lug.KurzBez as klasse, t.Haupttitel, t.ISBN, e.Exemplarnummer
+                FROM Leser l
+                JOIN Verleih v ON v.Leser = l.Buchungsnummer
+                JOIN Exemplar e ON v.Exemplar = e.Buchungsnummer
+                JOIN Titel t ON e.Titel = t.Buchungsnummer
+                LEFT JOIN SchuelerSchuljahr ssj ON ssj.LeserId = l.Buchungsnummer AND ssj.SchuljahrId = ?
+                LEFT JOIN Leser_UG lug ON lug.Buchungsnummer = ssj.KlasseId
+                WHERE v.Zurückgegeben = 0
+            """, (self.config["jahres_id"],)).fetchall()
+            for r in rows:
+                sid = str(r["Lesernummer"])
+                if sid not in d:
+                    d[sid] = {"name": f"{r['Vorname']} {r['Nachname']}", "name_file": f"{r['Nachname']}_{r['Vorname']}",
+                              "klasse": r["klasse"] or "undef", "geburt": str(r["Geburtsdatum"]).split(" ")[0] if r["Geburtsdatum"] else None,
+                              "buecher": []}
+                d[sid]["buecher"].append({"titel": r["Haupttitel"], "inv": r["Exemplarnummer"], "isbn": r["ISBN"] or "---"})
         return d
 
     def gen_hash(self, data):
@@ -350,8 +340,7 @@ class RueckgabeApp(ctk.CTk):
         writer = PdfWriter(); reader = PdfReader(rp)
         for p in reader.pages: writer.add_page(p)
         g = data["geburt"]
-        # PW Logik (TTMMJJJJ)
-        pw = f"{g[8:10]}{g[5:7]}{g[0:4]}" if g and "-" in g else f"ID{sid}"
+        pw = f"{g[8:10]}{g[5:7]}{g[0:4]}" if g and len(g) >= 10 else f"ID{sid}"
         writer.encrypt(pw)
         with open(fp, "wb") as f: writer.write(f)
         rp.unlink(); return fp
@@ -362,13 +351,28 @@ class RueckgabeApp(ctk.CTk):
         for p in parts:
             p_acc = f"{p_acc}/{p}" if p_acc else p
             if p_acc not in c_dirs:
-                sess.request("MKCOL", f"{self.config['nextcloud']['base_url']}/remote.php/dav/files/{self.config['nextcloud']['user']}/{p_acc}")
+                url = f"{self.config['nextcloud']['base_url']}/remote.php/dav/files/{self.config['nextcloud']['user']}/{p_acc}"
+                sess.request("MKCOL", url)
                 c_dirs.add(p_acc)
         url = f"{self.config['nextcloud']['base_url']}/remote.php/dav/files/{self.config['nextcloud']['user']}/{rem}"
         with open(loc, "rb") as f: sess.put(url, data=f)
+        
         api = f"{self.config['nextcloud']['base_url']}/ocs/v2.php/apps/files_sharing/api/v1/shares"
         r = sess.post(api, data={"path": f"/{rem}", "shareType": 3, "permissions": 1})
-        return ET.fromstring(r.text).find('.//url').text
+        
+        # --- FEHLERBEHEBUNG FÜR NONE-TYPE OBJEKT ---
+        try:
+            tree = ET.fromstring(r.text)
+            url_element = tree.find('.//url')
+            if url_element is not None:
+                return url_element.text
+            else:
+                # Falls kein URL Tag gefunden wurde (z.B. Fehler von Nextcloud)
+                status_msg = tree.find('.//message')
+                msg = status_msg.text if status_msg is not None else "Unbekannter API Fehler"
+                raise RuntimeError(f"Nextcloud Share-Link konnte nicht erstellt werden: {msg}")
+        except ET.ParseError:
+            raise RuntimeError(f"Ungültige Antwort von Nextcloud (Kein XML). Status: {r.status_code}")
 
     def make_print(self, sid, data, link, pr_dir, qr_d):
         kl_dir = pr_dir / self.slug(data['klasse'])
@@ -380,8 +384,7 @@ class RueckgabeApp(ctk.CTk):
         c.drawImage(str(q_p), 50, 500, 180, 180)
         c.setFont("Helvetica", 12); c.drawString(50, 480, f"Für: {data['name']}")
         g = data["geburt"]
-        # PW Logik (TTMMJJJJ)
-        pw = f"{g[8:10]}{g[5:7]}{g[0:4]}" if g and "-" in g else f"ID{sid}"
+        pw = f"{g[8:10]}{g[5:7]}{g[0:4]}" if g and len(g) >= 10 else f"ID{sid}"
         c.setFont("Helvetica-Bold", 12); c.drawString(50, 460, f"Passwort: {pw}")
         c.save(); q_p.unlink()
 
