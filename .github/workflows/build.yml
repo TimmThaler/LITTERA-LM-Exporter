@@ -26,9 +26,9 @@ jobs:
             artifact: LMF-Manager-Mac-latest
             zip: LMF-Manager-Mac-latest.zip
 
-          - os: macos-11
-            artifact: LMF-Manager-Mac-macos11
-            zip: LMF-Manager-Mac-macos11.zip
+          #- os: macos-11
+          #  artifact: LMF-Manager-Mac-macos11
+          #  zip: LMF-Manager-Mac-macos11.zip
 
     steps:
       - uses: actions/checkout@v4
