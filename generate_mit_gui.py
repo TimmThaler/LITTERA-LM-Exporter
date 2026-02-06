@@ -347,33 +347,63 @@ class RueckgabeApp(ctk.CTk):
         rp.unlink(); return fp
 
     def upload_nc(self, sess, loc, rem, c_dirs):
+        # WICHTIG: Erzwinge, dass 'rem' ein Path-Objekt ist, falls ein String übergeben wurde
+        from pathlib import Path
+        rem = Path(rem) 
+    
+        # 1. Ordnerstruktur auf Nextcloud prüfen/erstellen
+        # .parts zerlegt den Pfad in einzelne Ordnernamen
         parts = rem.parent.parts
-        p_acc = ""
+        p_acc = Path()
+    
         for p in parts:
-            p_acc = f"{p_acc}/{p}" if p_acc else p
-            if p_acc not in c_dirs:
-                url = f"{self.config['nextcloud']['base_url']}/remote.php/dav/files/{self.config['nextcloud']['user']}/{p_acc}"
+            # Überspringe Root-Verzeichnisse wie "/" oder "C:\" (Windows-spezifisch)
+            if p in ["/", "\\"] or ":" in p: 
+                continue
+            
+            p_acc = p_acc / p
+            # Hier nutzen wir .as_posix(), um UNTER WINDOWS "/" statt "\" zu erzwingen
+            p_acc_str = p_acc.as_posix()
+        
+            if p_acc_str not in c_dirs:
+                url = f"{self.config['nextcloud']['base_url']}/remote.php/dav/files/{self.config['nextcloud']['user']}/{p_acc_str}"
+                # MKCOL erstellt den Ordner auf der Nextcloud
                 sess.request("MKCOL", url)
-                c_dirs.add(p_acc)
-        url = f"{self.config['nextcloud']['base_url']}/remote.php/dav/files/{self.config['nextcloud']['user']}/{rem}"
-        with open(loc, "rb") as f: sess.put(url, data=f)
-        
+                c_dirs.add(p_acc_str)
+
+        # 2. Datei hochladen (PUT)
+        # Auch hier: .as_posix() sorgt dafür, dass die URL Slashes hat, keine Backslashes
+        rem_str = rem.as_posix()
+        url = f"{self.config['nextcloud']['base_url']}/remote.php/dav/files/{self.config['nextcloud']['user']}/{rem_str}"
+    
+        with open(loc, "rb") as f:
+            sess.put(url, data=f)
+    
+        # 3. Share-Link erstellen (OCS API)
         api = f"{self.config['nextcloud']['base_url']}/ocs/v2.php/apps/files_sharing/api/v1/shares"
-        r = sess.post(api, data={"path": f"/{rem}", "shareType": 3, "permissions": 1})
+    
+        # Der Pfad für die Share-API muss mit einem "/" beginnen und darf nur Slashes haben
+        ocs_path = f"/{rem_str}"
         
-        # --- FEHLERBEHEBUNG FÜR NONE-TYPE OBJEKT ---
+        r = sess.post(api, data={
+            "path": ocs_path,
+            "shareType": 3,
+            "permissions": 1
+        })
+        
+        # XML Antwort verarbeiten
         try:
             tree = ET.fromstring(r.text)
             url_element = tree.find('.//url')
             if url_element is not None:
                 return url_element.text
             else:
-                # Falls kein URL Tag gefunden wurde (z.B. Fehler von Nextcloud)
                 status_msg = tree.find('.//message')
-                msg = status_msg.text if status_msg is not None else "Unbekannter API Fehler"
-                raise RuntimeError(f"Nextcloud Share-Link konnte nicht erstellt werden: {msg}")
-        except ET.ParseError:
-            raise RuntimeError(f"Ungültige Antwort von Nextcloud (Kein XML). Status: {r.status_code}")
+                msg = status_msg.text if status_msg is not None else "Unbekannter Fehler"
+                raise RuntimeError(f"Nextcloud Share-Fehler: {msg} (Pfad: {ocs_path})")
+        except Exception as e:
+                raise RuntimeError(f"Fehler beim Parsen der Nextcloud-Antwort: {e}")
+        
 
     def make_print(self, sid, data, link, pr_dir, qr_d):
         kl_dir = pr_dir / self.slug(data['klasse'])
