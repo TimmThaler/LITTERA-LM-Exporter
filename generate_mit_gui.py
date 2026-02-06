@@ -412,6 +412,8 @@ class RueckgabeApp(ctk.CTk):
         q_p = qr_d / f"{sid}.png"; qrcode.make(link).save(q_p)
         c = canvas.Canvas(str(out), pagesize=A4)
         c.setFont("Helvetica-Bold", 18); c.drawString(50, 780, "Schulbuch-Rückgabe")
+        c.setFont("Helvetica-Bold", 14); c.drawString(50, 750, f"Name: {data['name']} (Klasse: {data['klasse']})")
+        c.setFont("Helvetica", 12); c.drawString(50, 700, f"Link: {link}")
         c.drawImage(str(q_p), 50, 500, 180, 180)
         c.setFont("Helvetica", 12); c.drawString(50, 480, f"Für: {data['name']}")
         g = data["geburt"]
