@@ -255,6 +255,7 @@ class RueckgabeApp(ctk.CTk):
                     f_name = f"{self.slug(data['name_file'])}_{sid}.pdf"
                     loc_pdf = pdf_dir / kl_slug / f_name
                     rem_p = Path(self.config["nextcloud"]["remote_path_prefix"]) / kl_slug / f_name
+                    rem_p_posix = rem_p.as_posix() # Garantiert "/"
 
                     if res and res[1] == curr_hash and loc_pdf.exists():
                         link = res[0]
@@ -384,7 +385,7 @@ class RueckgabeApp(ctk.CTk):
         c.drawImage(str(q_p), 50, 500, 180, 180)
         c.setFont("Helvetica", 12); c.drawString(50, 480, f"Für: {data['name']}")
         g = data["geburt"]
-        pw = f"{g[8:10]}{g[5:7]}{g[0:4]}" if g and len(g) >= 10 else f"ID{sid}"
+        pw = f"Dein Geburtsdatum im Format TTMMJJJJ" if g and len(g) >= 10 else f"ID{sid}"
         c.setFont("Helvetica-Bold", 12); c.drawString(50, 460, f"Passwort: {pw}")
         c.save(); q_p.unlink()
 
