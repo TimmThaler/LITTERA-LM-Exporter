@@ -49,7 +49,7 @@ jobs:
       - name: Build Windows
         if: matrix.os == 'windows-latest'
         run: |
-          pyinstaller --noconfirm --onefile --windowed --collect-all customtkinter --name "LMF-Export-Manager" generate_mit_gui.py
+          pyinstaller --noconfirm --onefile --windowed --collect-all customtkinter --icon="icon.ico" --name "LMF-Export-Manager" generate_mit_gui.py
 
       # macOS + Linux
       - name: Build macOS / Linux
@@ -59,6 +59,7 @@ jobs:
             --windowed \
             --collect-all customtkinter \
             --name "LMF-Export-Manager" \
+            --icon="icon.ico" \
             generate_mit_gui.py
 
       - name: Zip macOS App
