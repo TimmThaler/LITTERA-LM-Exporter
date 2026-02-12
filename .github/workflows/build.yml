@@ -8,35 +8,28 @@ on:
 
 jobs:
   build:
-    name: Build on ${{ matrix.os }} (${{ matrix.variant }})
+    name: Build on ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
 
     strategy:
       matrix:
         include:
-          # Windows Onefile
           - os: windows-latest
-            variant: onefile
-            artifact: LMF-Manager-Windows-Onefile
-            output: dist/LMF-Export-Manager.exe
+            artifact: LMF-Manager-Windows
+            zip: LMF-Manager-Windows-latest.zip
+            #output: dist/LMF-Export-Manager.exe
 
-          # Windows Folder (multi-file)
-          - os: windows-latest
-            variant: folder
-            artifact: LMF-Manager-Windows-Folder
-            zip: LMF-Export-Manager-Windows-Folder.zip
-
-          # Linux
           - os: ubuntu-latest
-            variant: default
             artifact: LMF-Manager-Linux
             output: dist/LMF-Export-Manager
 
-          # macOS
           - os: macos-latest
-            variant: default
-            artifact: LMF-Manager-Mac
-            zip: LMF-Export-Manager-Mac.zip
+            artifact: LMF-Manager-Mac-latest
+            zip: LMF-Manager-Mac-latest.zip
+
+          #- os: macos-11
+          #  artifact: LMF-Manager-Mac-macos11
+          #  zip: LMF-Manager-Mac-macos11.zip
 
     steps:
       - uses: actions/checkout@v4
@@ -52,58 +45,37 @@ jobs:
           pip install -r requirements.txt
           pip install pyinstaller
 
-      # ------------------------
-      # Windows Onefile
-      # ------------------------
-      - name: Build Windows Onefile
-        if: matrix.os == 'windows-latest' && matrix.variant == 'onefile'
-        run: |
-          pyinstaller --noconfirm --onefile --windowed ^
-            --collect-all customtkinter ^
-            --icon="icon.ico" ^
-            --name "LMF-Export-Manager" ^
-            generate_mit_gui.py
 
-      # ------------------------
-      # Windows Folder
-      # ------------------------
-      - name: Build Windows Folder
-        if: matrix.os == 'windows-latest' && matrix.variant == 'folder'
+      # Windows
+      - name: Build Windows
+        if: matrix.os == 'windows-latest'
         run: |
-          pyinstaller --noconfirm --windowed ^
-            --collect-all customtkinter ^
-            --icon="icon.ico" ^
-            --name "LMF-Export-Manager" ^
-            generate_mit_gui.py
+          pyinstaller --noconfirm --onefile --windowed --collect-all customtkinter --icon="icon.ico" --name "LMF-Export-Manager" generate_mit_gui.py
 
       - name: Zip Windows Folder
-        if: matrix.os == 'windows-latest' && matrix.variant == 'folder'
+        if: matrix.os == 'windows-latest'
         run: |
           Compress-Archive -Path dist/LMF-Export-Manager/* `
             -DestinationPath ${{ matrix.zip }}
 
-      # ------------------------
-      # macOS / Linux
-      # ------------------------
+      # macOS + Linux
       - name: Build macOS / Linux
         if: matrix.os != 'windows-latest'
         run: |
           pyinstaller --noconfirm \
             --windowed \
             --collect-all customtkinter \
-            --icon="icon.ico" \
             --name "LMF-Export-Manager" \
+            --icon="icon.ico" \
             generate_mit_gui.py
 
       - name: Zip macOS App
-        if: matrix.os == 'macos-latest'
+        if: startsWith(matrix.os, 'macos')
         run: |
           cd dist
           zip -r "../${{ matrix.zip }}" LMF-Export-Manager.app
 
-      # ------------------------
       # Upload Artifacts
-      # ------------------------
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
