@@ -50,12 +50,12 @@ jobs:
       - name: Build Windows
         if: matrix.os == 'windows-latest'
         run: |
-          pyinstaller --noconfirm --onefile --windowed --collect-all customtkinter --icon="icon.ico" --name "LMF-Export-Manager" generate_mit_gui.py
+          pyinstaller --noconfirm --windowed --collect-all customtkinter --icon="icon.ico" --name "LMF-Export-Manager" generate_mit_gui.py
 
       - name: Zip Windows Folder
         if: matrix.os == 'windows-latest'
         run: |
-          Compress-Archive -Path dist/LMF-Export-Manager/* `
+          Compress-Archive -Path dist/LMF-Export-Manager `
             -DestinationPath ${{ matrix.zip }}
 
       # macOS + Linux
