@@ -55,18 +55,15 @@ jobs:
       - name: Zip Windows Folder
         if: matrix.os == 'windows-latest'
         run: |
-          $zipPath = "${{ matrix.zip }}"
           $buildDir = "dist/LMF-Export-Manager"
+          $zipPath = "${{ matrix.zip }}"
 
+          # Lösche alte ZIP, falls vorhanden
           if (Test-Path $zipPath) { Remove-Item $zipPath }
 
-          # Nur die EXE + benötigte Unterordner (ohne INTERNAL) zippen
-          $items = Get-ChildItem $buildDir -Recurse | Where-Object {
-              $_.PSIsContainer -and $_.Name -ne "INTERNAL" -or $_.PSIsContainer -eq $false
-          }
-
-          # ZIP erstellen
-          Compress-Archive -Path $items.FullName -DestinationPath $zipPath
+          # Nur Dateien (EXE + DLLs), keine Unterordner wie INTERNAL
+          $files = Get-ChildItem $buildDir -File
+          Compress-Archive -Path $files.FullName -DestinationPath $zipPath
 
       # macOS + Linux
       - name: Build macOS / Linux
