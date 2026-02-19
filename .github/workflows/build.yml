@@ -87,23 +87,12 @@ jobs:
         with:
           path: artifacts
 
-      # Nur die benötigten Dateien in einen Ordner kopieren
-      - name: Prepare release files
-        run: |
-          mkdir release-files
-
-          # Windows
-          cp artifacts/LMF-Manager-Windows/LMF-Export-Manager.exe release-files/
-
-          # Linux
-          cp artifacts/LMF-Manager-Linux/LMF-Export-Manager release-files/
-
-          # macOS
-          cp artifacts/LMF-Manager-Mac-latest/LMF-Manager-Mac-latest.zip release-files/
-
       - name: Create release
         uses: softprops/action-gh-release@v2
         with:
-          files: release-files/*
+          files: |
+            artifacts/LMF-Manager-Windows/LMF-Export-Manager.zip
+            artifacts/LMF-Manager-Linux/LMF-Export-Manager
+            artifacts/LMF-Manager-Mac-latest/LMF-Manager-Mac-latest.zip
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
