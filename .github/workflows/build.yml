@@ -15,28 +15,30 @@ jobs:
       matrix:
         include:
           - os: windows-latest
-            artifact: LMF-Manager-Windows
-            output: dist/LMF-Export-Manager.exe
+            artifact_name: LMF-Manager-Windows
+            build_cmd: pyinstaller --noconfirm --onefile --windowed --collect-all customtkinter --icon="icon.ico" --name "LMF-Export-Manager" generate_mit_gui.py
+            upload_path: dist/LMF-Export-Manager.exe
 
           - os: ubuntu-latest
-            artifact: LMF-Manager-Linux
-            output: dist/LMF-Export-Manager
+            artifact_name: LMF-Manager-Linux
+            # Hier ist das --onefile wichtig!
+            build_cmd: pyinstaller --noconfirm --onefile --windowed --collect-all customtkinter --icon="icon.ico" --name "LMF-Export-Manager" generate_mit_gui.py
+            upload_path: dist/LMF-Export-Manager
 
           - os: macos-latest
-            artifact: LMF-Manager-Mac-latest
-            zip: LMF-Manager-Mac-latest.zip
-
-          #- os: macos-11
-          #  artifact: LMF-Manager-Mac-macos11
-          #  zip: LMF-Manager-Mac-macos11.zip
+            artifact_name: LMF-Manager-Mac
+            # macOS .app ist ein Ordner, daher hier kein --onefile, wir zippen es später
+            build_cmd: pyinstaller --noconfirm --windowed --collect-all customtkinter --icon="icon.ico" --name "LMF-Export-Manager" generate_mit_gui.py
+            upload_path: LMF-Manager-Mac.zip
 
     steps:
       - uses: actions/checkout@v4
 
       - name: Setup Python
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@v5
         with:
           python-version: '3.10'
+          cache: 'pip' # Beschleunigt zukünftige Builds
 
       - name: Install dependencies
         run: |
@@ -44,55 +46,42 @@ jobs:
           pip install -r requirements.txt
           pip install pyinstaller
 
-
-      # Windows
-      - name: Build Windows
-        if: matrix.os == 'windows-latest'
-        run: |
-          pyinstaller --noconfirm --onefile --windowed --collect-all customtkinter --icon="icon.ico" --name "LMF-Export-Manager" generate_mit_gui.py
-
-      # macOS + Linux
-      - name: Build macOS / Linux
-        if: matrix.os != 'windows-latest'
-        run: |
-          pyinstaller --noconfirm \
-            --windowed \
-            --collect-all customtkinter \
-            --name "LMF-Export-Manager" \
-            --icon="icon.ico" \
-            generate_mit_gui.py
+      - name: Build with PyInstaller
+        run: ${{ matrix.build_cmd }}
 
       - name: Zip macOS App
-        if: startsWith(matrix.os, 'macos')
+        if: matrix.os == 'macos-latest'
         run: |
           cd dist
-          zip -r "../${{ matrix.zip }}" LMF-Export-Manager.app
+          zip -r "../LMF-Manager-Mac.zip" "LMF-Export-Manager.app"
 
-      # Upload Artifacts
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.artifact }}
-          path: |
-            ${{ matrix.output }}
-            ${{ matrix.zip }}
+          name: ${{ matrix.artifact_name }}
+          path: ${{ matrix.upload_path }}
+          if-no-files-found: error
 
   release:
     if: startsWith(github.ref, 'refs/tags/')
     needs: build
     runs-on: ubuntu-latest
+    permissions:
+      contents: write # Wichtig für neuere GITHUB_TOKEN Berechtigungen
 
     steps:
-      - uses: actions/download-artifact@v4
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
         with:
           path: artifacts
 
       - name: Create release
         uses: softprops/action-gh-release@v2
         with:
+          # Nutzt Wildcards, um alle Dateien in den Unterordnern zu finden
           files: |
-            artifacts/LMF-Manager-Windows/LMF-Export-Manager.zip
+            artifacts/LMF-Manager-Windows/LMF-Export-Manager.exe
             artifacts/LMF-Manager-Linux/LMF-Export-Manager
-            artifacts/LMF-Manager-Mac-latest/LMF-Manager-Mac-latest.zip
+            artifacts/LMF-Manager-Mac/LMF-Manager-Mac.zip
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
