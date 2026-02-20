@@ -10,26 +10,24 @@ jobs:
   build:
     name: Build on ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
-
     strategy:
+      fail-fast: false
       matrix:
         include:
           - os: windows-latest
             artifact_name: LMF-Manager-Windows
-            build_cmd: pyinstaller --noconfirm --onefile --windowed --collect-all customtkinter --icon="icon.ico" --name "LMF-Export-Manager" generate_mit_gui.py
-            upload_path: dist/LMF-Export-Manager.exe
+            binary_path: dist/LMF-Export-Manager.exe
+            final_name: LMF-Export-Manager-Windows.exe
 
           - os: ubuntu-latest
             artifact_name: LMF-Manager-Linux
-            # Hier ist das --onefile wichtig!
-            build_cmd: pyinstaller --noconfirm --onefile --windowed --collect-all customtkinter --icon="icon.ico" --name "LMF-Export-Manager" generate_mit_gui.py
-            upload_path: dist/LMF-Export-Manager
+            binary_path: dist/LMF-Export-Manager
+            final_name: LMF-Export-Manager-Linux
 
           - os: macos-latest
             artifact_name: LMF-Manager-Mac
-            # macOS .app ist ein Ordner, daher hier kein --onefile, wir zippen es später
-            build_cmd: pyinstaller --noconfirm --windowed --collect-all customtkinter --icon="icon.ico" --name "LMF-Export-Manager" generate_mit_gui.py
-            upload_path: LMF-Manager-Mac.zip
+            binary_path: dist/LMF-Export-Manager.app
+            final_name: LMF-Manager-Mac.zip
 
     steps:
       - uses: actions/checkout@v4
@@ -38,28 +36,40 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: '3.10'
-          cache: 'pip' # Beschleunigt zukünftige Builds
 
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
-          pip install pyinstaller
+          pip install pyinstaller customtkinter
 
       - name: Build with PyInstaller
-        run: ${{ matrix.build_cmd }}
-
-      - name: Zip macOS App
-        if: matrix.os == 'macos-latest'
+        shell: bash
         run: |
-          cd dist
-          zip -r "../LMF-Manager-Mac.zip" "LMF-Export-Manager.app"
+          # Wir erzwingen --onefile für Windows und Linux
+          # Für Mac lassen wir es weg, da .app ein Ordner ist
+          if [ "${{ matrix.os }}" == "macos-latest" ]; then
+            pyinstaller --noconfirm --windowed --collect-all customtkinter --icon="icon.ico" --name "LMF-Export-Manager" generate_mit_gui.py
+          else
+            pyinstaller --noconfirm --onefile --windowed --collect-all customtkinter --icon="icon.ico" --name "LMF-Export-Manager" generate_mit_gui.py
+          fi
+
+      - name: Prepare Artifact for Upload
+        shell: bash
+        run: |
+          mkdir -p upload_dir
+          if [ "${{ matrix.os }}" == "macos-latest" ]; then
+            cd dist && zip -r "../upload_dir/${{ matrix.final_name }}" "LMF-Export-Manager.app" && cd ..
+          else
+            # Wir verschieben NUR die eine Datei in das upload_dir
+            cp ${{ matrix.binary_path }} upload_dir/${{ matrix.final_name }}
+          fi
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact_name }}
-          path: ${{ matrix.upload_path }}
+          path: upload_dir/  # Lädt NUR den Inhalt von upload_dir hoch (eine Datei)
           if-no-files-found: error
 
   release:
@@ -67,21 +77,20 @@ jobs:
     needs: build
     runs-on: ubuntu-latest
     permissions:
-      contents: write # Wichtig für neuere GITHUB_TOKEN Berechtigungen
-
+      contents: write
     steps:
       - name: Download all artifacts
         uses: actions/download-artifact@v4
         with:
-          path: artifacts
+          path: all_artifacts
+          # In v4 werden Artefakte in Unterordnern gespeichert (all_artifacts/LMF-Manager-Windows/...)
 
       - name: Create release
         uses: softprops/action-gh-release@v2
         with:
-          # Nutzt Wildcards, um alle Dateien in den Unterordnern zu finden
           files: |
-            artifacts/LMF-Manager-Windows/LMF-Export-Manager.exe
-            artifacts/LMF-Manager-Linux/LMF-Export-Manager
-            artifacts/LMF-Manager-Mac/LMF-Manager-Mac.zip
+            all_artifacts/LMF-Manager-Windows/LMF-Export-Manager-Windows.exe
+            all_artifacts/LMF-Manager-Linux/LMF-Export-Manager-Linux
+            all_artifacts/LMF-Manager-Mac/LMF-Manager-Mac.zip
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
