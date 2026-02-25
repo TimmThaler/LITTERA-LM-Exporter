@@ -2,8 +2,8 @@ name: Build Executables
 
 on:
   push:
-    tags: [ "v*" ] 
-  workflow_dispatch: 
+    tags: [ "v*" ]
+  workflow_dispatch:
 
 jobs:
   build:
@@ -20,7 +20,7 @@ jobs:
             extension: ""
           - os: macos-latest
             artifact_name: LMF-Export-Manager_macos
-            extension: "" # Mac nutzt .app Ordner, der gezippt wird
+            extension: ""
 
     runs-on: ${{ matrix.os }}
 
@@ -42,47 +42,49 @@ jobs:
 
       - name: Build with PyInstaller
         run: |
-          # Wir bauen die App
           pyinstaller --noconfirm --onefile --windowed --collect-all customtkinter --icon="icon.ico" --name "LMF-Export-Manager" generate_mit_gui.py
         shell: bash
 
-      - name: Packaging (Strict Isolation)
+      - name: Clean and Zip
         shell: bash
         run: |
-          # 1. Erstelle einen leeren Staging-Ordner
-          mkdir staging
+          # 1. Erstelle einen völlig isolierten Ordner außerhalb von dist/build
+          mkdir FINAL_OUT
           
-          # 2. Logik für macOS (.app ist ein Verzeichnis) vs Windows/Linux (Datei)
+          # 2. Kopiere NUR das Ergebnis hinein
           if [ "${{ matrix.os }}" == "macos-latest" ]; then
-            # Auf Mac existiert meist beides: das binary und das .app Bundle. 
-            # Wir nehmen das Bundle, falls vorhanden, sonst das binary.
-            if [ -d "dist/LMF-Export-Manager.app" ]; then
-              cp -r "dist/LMF-Export-Manager.app" "staging/LMF-Export-Manager.app"
-            else
-              cp "dist/LMF-Export-Manager" "staging/${{ matrix.artifact_name }}"
-            fi
+            # Auf Mac nehmen wir das .app Bundle (was ein Ordner ist)
+            cp -r "dist/LMF-Export-Manager.app" "FINAL_OUT/"
           else
-            # Windows und Linux: Einfach die einzelne Datei kopieren
-            cp dist/LMF-Export-Manager${{ matrix.extension }} staging/${{ matrix.artifact_name }}${{ matrix.extension }}
+            # Windows/Linux: Die eine Datei kopieren und umbenennen
+            cp "dist/LMF-Export-Manager${{ matrix.extension }}" "FINAL_OUT/${{ matrix.artifact_name }}${{ matrix.extension }}"
           fi
-
-          # 3. Zippe den Inhalt des staging-Ordners in eine einzige Datei
-          cd staging
+          
+          # 3. WICHTIG: Lösche den gesamten dist und build Ordner! 
+          # Damit existieren die 300+ Einzeldateien nicht mehr auf dem Runner.
+          rm -rf dist
+          rm -rf build
+          
+          # 4. Zippe den isolierten Ordner
+          cd FINAL_OUT
           if [ "${{ runner.os }}" == "Windows" ]; then
             powershell Compress-Archive -Path "*" -DestinationPath "../${{ matrix.artifact_name }}.zip"
           else
             zip -r "../${{ matrix.artifact_name }}.zip" .
           fi
           cd ..
+          
+          # 5. Lösche auch den FINAL_OUT Ordner
+          rm -rf FINAL_OUT
 
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact_name }}
-          # WICHTIG: Nur die eine ZIP-Datei hochladen!
+          # Wir geben hier EXAKT den Pfad zur ZIP-Datei an. 
+          # Da alles andere gelöscht wurde, kann GitHub nichts anderes finden.
           path: ${{ matrix.artifact_name }}.zip
           if-no-files-found: error
-          retention-days: 5
 
   release:
     name: Create Release
@@ -93,25 +95,24 @@ jobs:
       contents: write
 
     steps:
-
       - name: Delete old release assets
         uses: mknejp/delete-release-assets@v1
         with:
           token: ${{ github.token }}
           tag: ${{ github.ref_name }}
           assets: '*.*'
-      
+
       - name: Download all artifacts
         uses: actions/download-artifact@v4
         with:
-          path: ./release_files/
+          path: ./all_zipped_files
           merge-multiple: true
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          # Es werden nur die 3 ZIP-Dateien angehängt
-          files: ./release_files/*.zip
+          # Hier sagen wir explizit: Nimm nur die .zip Dateien
+          files: ./all_zipped_files/*.zip
           name: Release ${{ github.ref_name }}
           draft: false
           prerelease: false
