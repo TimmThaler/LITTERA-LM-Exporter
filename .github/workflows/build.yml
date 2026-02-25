@@ -2,8 +2,8 @@ name: Build Executables
 
 on:
   push:
-    tags: [ "v*" ]
-  workflow_dispatch:
+    tags: [ "v*" ] 
+  workflow_dispatch: 
 
 jobs:
   build:
@@ -45,44 +45,38 @@ jobs:
           pyinstaller --noconfirm --onefile --windowed --collect-all customtkinter --icon="icon.ico" --name "LMF-Export-Manager" generate_mit_gui.py
         shell: bash
 
-      - name: Clean and Zip
+      - name: Zip Immediately and Cleanup
         shell: bash
         run: |
-          # 1. Erstelle einen völlig isolierten Ordner außerhalb von dist/build
-          mkdir FINAL_OUT
+          # 1. In den dist-Ordner gehen
+          cd dist
           
-          # 2. Kopiere NUR das Ergebnis hinein
+          # 2. Direkt hier drin zippen
           if [ "${{ matrix.os }}" == "macos-latest" ]; then
-            # Auf Mac nehmen wir das .app Bundle (was ein Ordner ist)
-            cp -r "dist/LMF-Export-Manager.app" "FINAL_OUT/"
+            # Mac: Zippe den .app Ordner (-r für rekursiv)
+            zip -r "../${{ matrix.artifact_name }}.zip" "LMF-Export-Manager.app"
+          elif [ "${{ matrix.os }}" == "windows-latest" ]; then
+            # Windows: Nutze PowerShell zum Zippen der einen .exe
+            powershell Compress-Archive -Path "LMF-Export-Manager.exe" -DestinationPath "../${{ matrix.artifact_name }}.zip"
           else
-            # Windows/Linux: Die eine Datei kopieren und umbenennen
-            cp "dist/LMF-Export-Manager${{ matrix.extension }}" "FINAL_OUT/${{ matrix.artifact_name }}${{ matrix.extension }}"
+            # Linux: Zippe die eine Datei
+            zip "../${{ matrix.artifact_name }}.zip" "LMF-Export-Manager"
           fi
           
-          # 3. WICHTIG: Lösche den gesamten dist und build Ordner! 
-          # Damit existieren die 300+ Einzeldateien nicht mehr auf dem Runner.
-          rm -rf dist
-          rm -rf build
-          
-          # 4. Zippe den isolierten Ordner
-          cd FINAL_OUT
-          if [ "${{ runner.os }}" == "Windows" ]; then
-            powershell Compress-Archive -Path "*" -DestinationPath "../${{ matrix.artifact_name }}.zip"
-          else
-            zip -r "../${{ matrix.artifact_name }}.zip" .
-          fi
+          # 3. Zurück ins Hauptverzeichnis
           cd ..
           
-          # 5. Lösche auch den FINAL_OUT Ordner
-          rm -rf FINAL_OUT
+          # 4. RADIKAL-REINIGUNG: Lösche ALLES außer der neuen ZIP-Datei
+          # Das stellt sicher, dass der Runner nur noch EINE Datei sieht.
+          rm -rf dist
+          rm -rf build
+          rm -f *.spec
 
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact_name }}
-          # Wir geben hier EXAKT den Pfad zur ZIP-Datei an. 
-          # Da alles andere gelöscht wurde, kann GitHub nichts anderes finden.
+          # Wir laden nur die EINE Zip-Datei hoch, die im Hauptverzeichnis liegt
           path: ${{ matrix.artifact_name }}.zip
           if-no-files-found: error
 
@@ -105,14 +99,14 @@ jobs:
       - name: Download all artifacts
         uses: actions/download-artifact@v4
         with:
-          path: ./all_zipped_files
+          path: ./release_assets
           merge-multiple: true
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          # Hier sagen wir explizit: Nimm nur die .zip Dateien
-          files: ./all_zipped_files/*.zip
+          # Anhängen der 3 Zip-Dateien
+          files: ./release_assets/*.zip
           name: Release ${{ github.ref_name }}
           draft: false
           prerelease: false
