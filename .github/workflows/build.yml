@@ -2,95 +2,90 @@ name: Build Executables
 
 on:
   push:
-    tags:
-      - 'v*'
-  workflow_dispatch:
+    tags: [ "v*" ] # Trigger bei Tags wie v1.0.1
+  workflow_dispatch: # Erlaubt manuelles Starten
 
 jobs:
   build:
-    name: Build on ${{ matrix.os }}
-    runs-on: ${{ matrix.os }}
     strategy:
-      fail-fast: false
       matrix:
+        # Die drei Betriebssysteme, für die kompiliert werden soll
+        os: [windows-latest, ubuntu-latest, macos-latest]
         include:
           - os: windows-latest
-            artifact_name: LMF-Manager-Windows
-            binary_path: dist/LMF-Export-Manager.exe
-            final_name: LMF-Export-Manager-Windows.exe
-
+            artifact_name: LMF-Export-Manager_windows
+            extension: .exe
           - os: ubuntu-latest
-            artifact_name: LMF-Manager-Linux
-            binary_path: dist/LMF-Export-Manager
-            final_name: LMF-Export-Manager-Linux
-
+            artifact_name: LMF-Export-Manager_linux
+            extension: ""
           - os: macos-latest
-            artifact_name: LMF-Manager-Mac
-            binary_path: dist/LMF-Export-Manager.app
-            final_name: LMF-Manager-Mac.zip
+            artifact_name: LMF-Export-Manager_macos
+            extension: ""
+
+    runs-on: ${{ matrix.os }}
 
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout Code
+        uses: actions/checkout@v4
 
-      - name: Setup Python
+      - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.10'
+          python-version: '3.10' # Hier deine gewünschte Version eintragen
 
-      - name: Install dependencies
+      - name: Install Dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt
-          pip install pyinstaller customtkinter
+          pip install pyinstaller
+          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+        shell: bash
 
       - name: Build with PyInstaller
-        shell: bash
         run: |
-          # Wir erzwingen --onefile für Windows und Linux
-          # Für Mac lassen wir es weg, da .app ein Ordner ist
-          if [ "${{ matrix.os }}" == "macos-latest" ]; then
-            pyinstaller --noconfirm --windowed --collect-all customtkinter --icon="icon.ico" --name "LMF-Export-Manager" generate_mit_gui.py
-          else
-            pyinstaller --noconfirm --onefile --windowed --collect-all customtkinter --icon="icon.ico" --name "LMF-Export-Manager" generate_mit_gui.py
-          fi
-
-      - name: Prepare Artifact for Upload
+          pyinstaller --noconfirm --onefile --windowed --collect-all customtkinter --icon="icon.ico" --name "LMF-Export-Manager" generate_mit_gui.py
         shell: bash
-        run: |
-          mkdir -p upload_dir
-          if [ "${{ matrix.os }}" == "macos-latest" ]; then
-            cd dist && zip -r "../upload_dir/${{ matrix.final_name }}" "LMF-Export-Manager.app" && cd ..
-          else
-            # Wir verschieben NUR die eine Datei in das upload_dir
-            cp ${{ matrix.binary_path }} upload_dir/${{ matrix.final_name }}
-          fi
 
-      - name: Upload artifact
+      - name: Prepare Artifact (Zip)
+        run: |
+          cd dist
+          # Umbenennen für Klarheit (optional)
+          mv LMF-Export-Manager${{ matrix.extension }} ${{ matrix.artifact_name }}${{ matrix.extension }}
+          # Zippen (Windows nutzt PowerShell, Unix nutzt zip)
+          if [ "${{ runner.os }}" == "Windows" ]; then
+            powershell Compress-Archive -Path "${{ matrix.artifact_name }}${{ matrix.extension }}" -DestinationPath "../${{ matrix.artifact_name }}.zip"
+          else
+            zip "../${{ matrix.artifact_name }}.zip" "${{ matrix.artifact_name }}${{ matrix.extension }}"
+          fi
+        shell: bash
+
+      - name: Upload Artifacts
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact_name }}
-          path: upload_dir/  # Lädt NUR den Inhalt von upload_dir hoch (eine Datei)
-          if-no-files-found: error
+          path: ${{ matrix.artifact_name }}.zip
 
   release:
-    if: startsWith(github.ref, 'refs/tags/')
+    name: Create Release
     needs: build
+    if: startsWith(github.ref, 'refs/tags/') # Nur ausführen, wenn ein Tag gepusht wurde
     runs-on: ubuntu-latest
     permissions:
-      contents: write
+      contents: write # Wichtig, um Dateien an das Release anzuhängen
+
     steps:
       - name: Download all artifacts
         uses: actions/download-artifact@v4
         with:
-          path: all_artifacts
-          # In v4 werden Artefakte in Unterordnern gespeichert (all_artifacts/LMF-Manager-Windows/...)
+          path: ./artifacts/
+          merge-multiple: true
 
-      - name: Create release
+      - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            all_artifacts/LMF-Manager-Windows/LMF-Export-Manager-Windows.exe
-            all_artifacts/LMF-Manager-Linux/LMF-Export-Manager-Linux
-            all_artifacts/LMF-Manager-Mac/LMF-Manager-Mac.zip
+            ./artifacts/*.zip
+          name: Release ${{ github.ref_name }}
+          draft: false
+          prerelease: false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
