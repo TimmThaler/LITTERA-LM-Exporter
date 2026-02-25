@@ -2,12 +2,13 @@ name: Build Executables
 
 on:
   push:
-    tags: [ "v*" ] # Trigger bei Tags wie v1.0.1
-  workflow_dispatch: # Erlaubt manuelles Starten
+    tags: [ "v*" ] 
+  workflow_dispatch: 
 
 jobs:
   build:
     strategy:
+      fail-fast: false
       matrix:
         os: [windows-latest, ubuntu-latest, macos-latest]
         include:
@@ -19,7 +20,7 @@ jobs:
             extension: ""
           - os: macos-latest
             artifact_name: LMF-Export-Manager_macos
-            extension: ""
+            extension: "" # Mac nutzt .app Ordner, der gezippt wird
 
     runs-on: ${{ matrix.os }}
 
@@ -35,42 +36,53 @@ jobs:
       - name: Install Dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install pyinstaller customtkinter # customtkinter explizit installieren
+          pip install pyinstaller customtkinter
           if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
         shell: bash
 
       - name: Build with PyInstaller
         run: |
-          # Wir bauen das Programm. Die Ausgabe landet standardmäßig in 'dist/LMF-Export-Manager'
+          # Wir bauen die App
           pyinstaller --noconfirm --onefile --windowed --collect-all customtkinter --icon="icon.ico" --name "LMF-Export-Manager" generate_mit_gui.py
         shell: bash
 
-      - name: Isolate and Zip Binary
-        # Dieser Schritt verhindert, dass hunderte temporäre Dateien mitgezippt werden
+      - name: Packaging (Strict Isolation)
+        shell: bash
         run: |
-          # 1. Erstelle einen komplett sauberen Ordner für den Export
-          mkdir export_folder
+          # 1. Erstelle einen leeren Staging-Ordner
+          mkdir staging
           
-          # 2. Kopiere NUR die fertige Datei aus 'dist' in den sauberen Ordner
-          # Dabei wird sie direkt in den gewünschten Artefakt-Namen umbenannt
-          cp dist/LMF-Export-Manager${{ matrix.extension }} export_folder/${{ matrix.artifact_name }}${{ matrix.extension }}
-          
-          # 3. In den Ordner wechseln und zippen (stellt sicher, dass keine Pfad-Strukturen im Zip sind)
-          cd export_folder
+          # 2. Logik für macOS (.app ist ein Verzeichnis) vs Windows/Linux (Datei)
+          if [ "${{ matrix.os }}" == "macos-latest" ]; then
+            # Auf Mac existiert meist beides: das binary und das .app Bundle. 
+            # Wir nehmen das Bundle, falls vorhanden, sonst das binary.
+            if [ -d "dist/LMF-Export-Manager.app" ]; then
+              cp -r "dist/LMF-Export-Manager.app" "staging/LMF-Export-Manager.app"
+            else
+              cp "dist/LMF-Export-Manager" "staging/${{ matrix.artifact_name }}"
+            fi
+          else
+            # Windows und Linux: Einfach die einzelne Datei kopieren
+            cp dist/LMF-Export-Manager${{ matrix.extension }} staging/${{ matrix.artifact_name }}${{ matrix.extension }}
+          fi
+
+          # 3. Zippe den Inhalt des staging-Ordners in eine einzige Datei
+          cd staging
           if [ "${{ runner.os }}" == "Windows" ]; then
             powershell Compress-Archive -Path "*" -DestinationPath "../${{ matrix.artifact_name }}.zip"
           else
-            zip ../${{ matrix.artifact_name }}.zip *
+            zip -r "../${{ matrix.artifact_name }}.zip" .
           fi
-        shell: bash
+          cd ..
 
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact_name }}
-          # Hier wird nur die EINE Zip-Datei hochgeladen, die wir gerade erstellt haben
+          # WICHTIG: Nur die eine ZIP-Datei hochladen!
           path: ${{ matrix.artifact_name }}.zip
           if-no-files-found: error
+          retention-days: 5
 
   release:
     name: Create Release
@@ -81,16 +93,24 @@ jobs:
       contents: write
 
     steps:
+
+      - name: Delete old release assets
+        uses: mknejp/delete-release-assets@v1
+        with:
+          token: ${{ github.token }}
+          tag: ${{ github.ref_name }}
+          assets: '*.*'
+      
       - name: Download all artifacts
         uses: actions/download-artifact@v4
         with:
           path: ./release_files/
-          merge-multiple: true # Legt alle Zips flach in den Ordner
+          merge-multiple: true
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          # Hier werden nur die .zip Dateien aus dem Ordner angehängt
+          # Es werden nur die 3 ZIP-Dateien angehängt
           files: ./release_files/*.zip
           name: Release ${{ github.ref_name }}
           draft: false
