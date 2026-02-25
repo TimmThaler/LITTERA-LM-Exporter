@@ -9,7 +9,6 @@ jobs:
   build:
     strategy:
       matrix:
-        # Die drei Betriebssysteme, für die kompiliert werden soll
         os: [windows-latest, ubuntu-latest, macos-latest]
         include:
           - os: windows-latest
@@ -31,59 +30,68 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.10' # Hier deine gewünschte Version eintragen
+          python-version: '3.10'
 
       - name: Install Dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install pyinstaller
+          pip install pyinstaller customtkinter # customtkinter explizit installieren
           if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
         shell: bash
 
       - name: Build with PyInstaller
         run: |
+          # Wir bauen das Programm. Die Ausgabe landet standardmäßig in 'dist/LMF-Export-Manager'
           pyinstaller --noconfirm --onefile --windowed --collect-all customtkinter --icon="icon.ico" --name "LMF-Export-Manager" generate_mit_gui.py
         shell: bash
 
-      - name: Prepare Artifact (Zip)
+      - name: Isolate and Zip Binary
+        # Dieser Schritt verhindert, dass hunderte temporäre Dateien mitgezippt werden
         run: |
-          cd dist
-          # Umbenennen für Klarheit (optional)
-          mv LMF-Export-Manager${{ matrix.extension }} ${{ matrix.artifact_name }}${{ matrix.extension }}
-          # Zippen (Windows nutzt PowerShell, Unix nutzt zip)
+          # 1. Erstelle einen komplett sauberen Ordner für den Export
+          mkdir export_folder
+          
+          # 2. Kopiere NUR die fertige Datei aus 'dist' in den sauberen Ordner
+          # Dabei wird sie direkt in den gewünschten Artefakt-Namen umbenannt
+          cp dist/LMF-Export-Manager${{ matrix.extension }} export_folder/${{ matrix.artifact_name }}${{ matrix.extension }}
+          
+          # 3. In den Ordner wechseln und zippen (stellt sicher, dass keine Pfad-Strukturen im Zip sind)
+          cd export_folder
           if [ "${{ runner.os }}" == "Windows" ]; then
-            powershell Compress-Archive -Path "${{ matrix.artifact_name }}${{ matrix.extension }}" -DestinationPath "../${{ matrix.artifact_name }}.zip"
+            powershell Compress-Archive -Path "*" -DestinationPath "../${{ matrix.artifact_name }}.zip"
           else
-            zip "../${{ matrix.artifact_name }}.zip" "${{ matrix.artifact_name }}${{ matrix.extension }}"
+            zip ../${{ matrix.artifact_name }}.zip *
           fi
         shell: bash
 
-      - name: Upload Artifacts
+      - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact_name }}
+          # Hier wird nur die EINE Zip-Datei hochgeladen, die wir gerade erstellt haben
           path: ${{ matrix.artifact_name }}.zip
+          if-no-files-found: error
 
   release:
     name: Create Release
     needs: build
-    if: startsWith(github.ref, 'refs/tags/') # Nur ausführen, wenn ein Tag gepusht wurde
+    if: startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-latest
     permissions:
-      contents: write # Wichtig, um Dateien an das Release anzuhängen
+      contents: write
 
     steps:
       - name: Download all artifacts
         uses: actions/download-artifact@v4
         with:
-          path: ./artifacts/
-          merge-multiple: true
+          path: ./release_files/
+          merge-multiple: true # Legt alle Zips flach in den Ordner
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          files: |
-            ./artifacts/*.zip
+          # Hier werden nur die .zip Dateien aus dem Ordner angehängt
+          files: ./release_files/*.zip
           name: Release ${{ github.ref_name }}
           draft: false
           prerelease: false
