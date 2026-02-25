@@ -42,41 +42,40 @@ jobs:
 
       - name: Build with PyInstaller
         run: |
+          # Wir bauen die App. Das Icon muss existieren, sonst bricht dieser Schritt ab!
           pyinstaller --noconfirm --onefile --windowed --collect-all customtkinter --icon="icon.ico" --name "LMF-Export-Manager" generate_mit_gui.py
         shell: bash
 
-      - name: Zip Immediately and Cleanup
-        shell: bash
+      - name: Package Windows
+        if: matrix.os == 'windows-latest'
         run: |
-          # 1. In den dist-Ordner gehen
+          # In PowerShell die .exe zippen
+          Compress-Archive -Path "dist/LMF-Export-Manager.exe" -DestinationPath "${{ matrix.artifact_name }}.zip"
+        shell: pwsh
+
+      - name: Package Linux
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          # Die Linux-Datei zippen
+          cd dist && zip "../${{ matrix.artifact_name }}.zip" "LMF-Export-Manager"
+        shell: bash
+
+      - name: Package macOS
+        if: matrix.os == 'macos-latest'
+        run: |
+          # Auf Mac prüfen wir, ob es ein .app Ordner oder eine Datei ist
           cd dist
-          
-          # 2. Direkt hier drin zippen
-          if [ "${{ matrix.os }}" == "macos-latest" ]; then
-            # Mac: Zippe den .app Ordner (-r für rekursiv)
+          if [ -d "LMF-Export-Manager.app" ]; then
             zip -r "../${{ matrix.artifact_name }}.zip" "LMF-Export-Manager.app"
-          elif [ "${{ matrix.os }}" == "windows-latest" ]; then
-            # Windows: Nutze PowerShell zum Zippen der einen .exe
-            powershell Compress-Archive -Path "LMF-Export-Manager.exe" -DestinationPath "../${{ matrix.artifact_name }}.zip"
           else
-            # Linux: Zippe die eine Datei
             zip "../${{ matrix.artifact_name }}.zip" "LMF-Export-Manager"
           fi
-          
-          # 3. Zurück ins Hauptverzeichnis
-          cd ..
-          
-          # 4. RADIKAL-REINIGUNG: Lösche ALLES außer der neuen ZIP-Datei
-          # Das stellt sicher, dass der Runner nur noch EINE Datei sieht.
-          rm -rf dist
-          rm -rf build
-          rm -f *.spec
+        shell: bash
 
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact_name }}
-          # Wir laden nur die EINE Zip-Datei hoch, die im Hauptverzeichnis liegt
           path: ${{ matrix.artifact_name }}.zip
           if-no-files-found: error
 
@@ -87,15 +86,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
-
     steps:
-      - name: Delete old release assets
-        uses: mknejp/delete-release-assets@v1
-        with:
-          token: ${{ github.token }}
-          tag: ${{ github.ref_name }}
-          assets: '*.*'
-
       - name: Download all artifacts
         uses: actions/download-artifact@v4
         with:
@@ -105,10 +96,7 @@ jobs:
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          # Anhängen der 3 Zip-Dateien
           files: ./release_assets/*.zip
           name: Release ${{ github.ref_name }}
-          draft: false
-          prerelease: false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
