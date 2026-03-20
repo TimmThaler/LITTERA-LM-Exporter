@@ -415,7 +415,6 @@ class RueckgabeApp(ctk.CTk):
         c.setFont("Helvetica-Bold", 14); c.drawString(50, 750, f"Name: {data['name']} (Klasse: {data['klasse']})")
         c.setFont("Helvetica", 12); c.drawString(50, 700, f"Link: {link}")
         c.drawImage(str(q_p), 50, 500, 180, 180)
-        c.setFont("Helvetica", 12); c.drawString(50, 480, f"Für: {data['name']}")
         g = data["geburt"]
         pw = f"Dein Geburtsdatum im Format TTMMJJJJ" if g and len(g) >= 10 else f"ID{sid}"
         c.setFont("Helvetica-Bold", 12); c.drawString(50, 460, f"Passwort: {pw}")
