@@ -10,17 +10,11 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [windows-latest, ubuntu-latest, macos-latest]
+        os: [windows-latest]
         include:
           - os: windows-latest
             artifact_name: LMF-Export-Manager_windows
             extension: .exe
-          - os: ubuntu-latest
-            artifact_name: LMF-Export-Manager_linux
-            extension: ""
-          - os: macos-latest
-            artifact_name: LMF-Export-Manager_macos
-            extension: ""
 
     runs-on: ${{ matrix.os }}
 
@@ -52,25 +46,6 @@ jobs:
           # In PowerShell die .exe zippen
           Compress-Archive -Path "dist/LMF-Export-Manager.exe" -DestinationPath "${{ matrix.artifact_name }}.zip"
         shell: pwsh
-
-      - name: Package Linux
-        if: matrix.os == 'ubuntu-latest'
-        run: |
-          # Die Linux-Datei zippen
-          cd dist && zip "../${{ matrix.artifact_name }}.zip" "LMF-Export-Manager"
-        shell: bash
-
-      - name: Package macOS
-        if: matrix.os == 'macos-latest'
-        run: |
-          # Auf Mac prüfen wir, ob es ein .app Ordner oder eine Datei ist
-          cd dist
-          if [ -d "LMF-Export-Manager.app" ]; then
-            zip -r "../${{ matrix.artifact_name }}.zip" "LMF-Export-Manager.app"
-          else
-            zip "../${{ matrix.artifact_name }}.zip" "LMF-Export-Manager"
-          fi
-        shell: bash
 
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
